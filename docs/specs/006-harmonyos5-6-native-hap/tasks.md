@@ -24,3 +24,10 @@
 - [x] T616 HAP：将应用图标替换为深林绿底、暖白色打开笔记本及从中缝生长的三叶树苗（FR-609）。
 - [ ] T617 HAP：将当前文件库、编辑器、拍照和恢复文案迁移至中文与 English 资源；SDK 10
   基线跟随系统语言，应用内覆盖留待兼容实现与真机验证（FR-610）。
+- [ ] T618 HAP：将 `NotebookRepository.list()` 拆为异步的笔记元数据/有界标题摘要加载；
+  `aboutToAppear` 不得同步 `readTextSync()` 遍历全文，打开编辑器时才读取完整 Markdown
+  （FR-611）。
+- [ ] T619 HAP：将文件库 `ForEach` 改为 `LazyForEach + IDataSource`，以 `NoteSummary` 而非
+  常驻全文驱动列表；搜索索引更新可取消且不阻塞首屏（FR-611）。
+- [ ] T620 HAP：补充大 Vault 冷启动、异步摘要失败、搜索取消和长列表节点复用的自动化/真机
+  证据；分别在 HarmonyOS 5 与 6 Mate 上记录启动、滚动和内存表现（FR-611）。

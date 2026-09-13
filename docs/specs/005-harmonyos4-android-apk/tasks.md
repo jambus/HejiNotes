@@ -84,6 +84,10 @@
 - [ ] T515 在 Mate 60 验证竖横屏、字体缩放、重启和连续拍照。
 - [ ] T516 输出可安装 APK、版本号、构建记录和真机验收结果。
 - [x] T555 Android：将应用图标替换为深林绿底、暖白色打开笔记本及从中缝生长的三叶树苗（FR-530）。
+- [ ] T556 Android：作为独立兼容性迁移审计当前 AGP/JDK 支持范围与 Android 29–34 行为变化，
+  分阶段提升 `targetSdk` 至 34，并将 Java/Kotlin 目标对齐到受支持版本；每阶段完成 SAF、
+  FileProvider 相机、WebView、前台后台服务/通知、安装升级和 Mate 60 回归，更新 release notes、
+  `versionName`、单调递增 `versionCode` 并生成 fresh APK（FR-531）。
 
 本机已验证共享 Vault 契约检查与 `android/gradlew --offline --no-daemon assembleDebug` 成功，产物为
 `android/app/build/outputs/apk/debug/app-debug.apk`；Mate 60 真机安装与验收仍未完成。

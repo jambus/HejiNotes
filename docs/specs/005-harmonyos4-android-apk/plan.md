@@ -40,6 +40,9 @@
 20. 将笔记移动目标从扁平文件夹列表改为层级目录选择器，保留当前位置、上级导航、根目录和明确提交语义。
 21. 将 Android 应用标识迁移至 `com.jambus.heji`，提供“禾记”与 “Heji Notes”本地化名称；记录其作为新安装包需重新授权 Vault 与 Google Drive 的影响，同时保持 Vault `.markbook` 契约不变。
 22. 以打开的笔记本与三叶树苗替换 Android 与 HAP 的应用图标，保留同一品牌构图和小尺寸可辨识性。
+23. 在独立发布迁移中将 Android target SDK 提升至 34，并以当前 Gradle/AGP 可支持的
+    Java/Kotlin 目标版本构建；逐项回归权限、相机、WebView、后台服务、通知、SAF 与 Mate 60
+    HarmonyOS 4 兼容层，完成前不将单纯配置改动作为候选发布。
 
 ## Constitution Check
 

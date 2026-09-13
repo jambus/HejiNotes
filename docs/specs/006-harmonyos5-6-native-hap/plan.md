@@ -17,6 +17,8 @@ CameraPicker 和平台安全存储。现有 HAP 实现作为基础，但交付�
 7. 对齐 Android 的打开笔记本与三叶树苗应用图标，验证 HAP 资源打包后仍保持同一构图。
 8. 将 HAP 当前页面的面向用户文案迁移至中英文资源，SDK 10 基线跟随系统语言；应用内覆盖
    因不支持的资源 override API 暂不提供，且不改变 Vault 行为。
+9. 将冷启动笔记枚举改为异步元数据/摘要管线，全文延迟到编辑或索引更新；长列表采用
+   `LazyForEach` 与数据源复用，并在 HarmonyOS 5/6 真机记录大 Vault 启动与滚动证据。
 
 ## Constitution Check
 

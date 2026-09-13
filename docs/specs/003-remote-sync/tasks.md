@@ -39,3 +39,9 @@
 - [ ] T320 Mate 60：验证后台同步离开设置页、编辑并保存本地笔记、旋转/Activity 重建、成功/
   失败/取消/中断通知、通知禁用兜底与同路径并发冲突保留。
 - [ ] T321 以本地 `MoveBundle` 变化、严格快照和成功基线规划并传播笔记/附件 bundle 移动；验证目标先上传、旧路径回收、冲突保留、连续搬运和旧路径不下载。
+- [ ] T322 Android：以单一 `openSyncInput` 流同时计算 MD5 与 SHA-256，并在保存同步基线时
+  复用未变化文件的本轮摘要；补充输入流打开次数、摘要正确性、读取失败关闭流和大附件回归测试
+  （FR-322）。
+- [ ] T323 Android：为 Google Drive 实现建立到 `SyncProvider`、`SyncPlanner`、`SyncEngine`
+  的适配边界和共享测试样例；迁移期间保持当前本地 `.trash/` 排除、普通删除不传播、条件写入、
+  MoveBundle 与冲突保留语义，未完成前不得声称支持 OneDrive/S3/WebDAV。
