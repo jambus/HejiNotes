@@ -15,6 +15,8 @@ CameraPicker 和平台安全存储。现有 HAP 实现作为基础，但交付�
 5. 实现文件库后对齐笔记与附件 bundle 移动和新的父目录 `assets/<stem>/` 捕获路径。
 6. 将 HAP bundle 标识迁移至 `com.jambus.heji`，提供“禾记”与 “Heji Notes”本地化应用名，并验证新安装后可重新选择既有 Vault 而不改变 Vault 契约。
 7. 对齐 Android 的打开笔记本与三叶树苗应用图标，验证 HAP 资源打包后仍保持同一构图。
+8. 将 HAP 当前页面的面向用户文案迁移至中英文资源，SDK 10 基线跟随系统语言；应用内覆盖
+   因不支持的资源 override API 暂不提供，且不改变 Vault 行为。
 
 ## Constitution Check
 

@@ -1,6 +1,10 @@
 {
   "string": [
     {
+      "name": "module_desc",
+      "value": "本地优先的 Markdown 笔记本"
+    },
+    {
       "name": "EntryAbility_desc",
       "value": "禾记主界面"
     },
@@ -8,5 +12,17 @@
       "name": "EntryAbility_label",
       "value": "禾记"
     }
+    ,{ "name": "ui_saved", "value": "已保存" }, { "name": "ui_unsaved", "value": "未保存" },
+    { "name": "ui_saving", "value": "正在保存…" }, { "name": "ui_save_failed", "value": "保存失败" },
+    { "name": "ui_no_vault", "value": "尚未选择 Vault" }, { "name": "ui_opening", "value": "打开中" },
+    { "name": "ui_choose_vault", "value": "选择 Vault" }, { "name": "ui_local_vault", "value": "本地 Obsidian Vault" },
+    { "name": "ui_search", "value": "搜索标题或正文" }, { "name": "ui_connect_vault", "value": "先连接一个 Obsidian Vault" },
+    { "name": "ui_no_notes", "value": "还没有笔记" }, { "name": "ui_create_daily", "value": "创建每日笔记" },
+    { "name": "ui_new_daily", "value": "新建每日笔记" }, { "name": "ui_no_results", "value": "没有匹配的笔记" },
+    { "name": "ui_back", "value": "返回" }, { "name": "ui_save", "value": "保存" }, { "name": "ui_cancel", "value": "取消" },
+    { "name": "ui_language", "value": "语言" }, { "name": "ui_enabled", "value": "已启用" },
+    { "name": "ui_chinese", "value": "中文" }, { "name": "ui_english", "value": "English" },
+    { "name": "ui_take_photo", "value": "拍照插入" }, { "name": "ui_adjust_photo", "value": "调整照片" }, { "name": "ui_crop_correct", "value": "裁剪并校正" }
+    ,{ "name": "ui_vault_help", "value": "笔记会直接保存为 Markdown 文件，电脑端可用 Obsidian 编辑。" }, { "name": "ui_create_today_help", "value": "创建今天的笔记，拍下眼前的内容。" }, { "name": "ui_search_help", "value": "换一个标题或正文关键词" }, { "name": "ui_title_hint", "value": "每日笔记标题" }, { "name": "ui_rich_text", "value": "富文本" }, { "name": "ui_processing", "value": "处理中" }, { "name": "ui_reset_rectangle", "value": "恢复矩形" }, { "name": "ui_insert_original", "value": "直接插入原图" }, { "name": "ui_vault_connected", "value": "Vault 已连接" }, { "name": "ui_choose_vault_first", "value": "请先选择 Obsidian Vault" }, { "name": "ui_create_failed", "value": "无法创建每日笔记" }, { "name": "ui_pick_file", "value": "手机端请选择 Vault 内任意 Markdown 文件" }, { "name": "ui_vault_unreadable", "value": "无法打开这个 Vault，请选择可读写目录" }, { "name": "ui_saved_to_vault", "value": "已保存到 Vault" }, { "name": "ui_save_error", "value": "保存失败，请检查 Vault 权限和存储空间" }, { "name": "ui_photo_failed", "value": "拍照未完成，请重试" }, { "name": "ui_corrected_saved", "value": "原图与校正图已保存" }, { "name": "ui_photo_saved", "value": "照片已插入并保存" }, { "name": "ui_correction_failed", "value": "图片校正失败，请重新拍摄" }
   ]
 }

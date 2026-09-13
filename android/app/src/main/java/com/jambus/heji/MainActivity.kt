@@ -126,6 +126,11 @@ class MainActivity : Activity() {
     private var drivePickerError: String? = null
     private var drivePickerMessage: String? = null
 
+    override fun attachBaseContext(newBase: android.content.Context) {
+        // Apply the saved app-only language before any view or resource is created.
+        super.attachBaseContext(UiLanguage.localizedContext(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repository = VaultRepository(this)
@@ -514,12 +519,12 @@ class MainActivity : Activity() {
 
     private fun showBrowserMore(anchor: View) {
         PopupMenu(this, anchor).apply {
-            menu.add("设置")
-            menu.add("切换 Vault")
+            menu.add(0, MENU_SETTINGS, 0, UiText.label(this@MainActivity, "设置"))
+            menu.add(0, MENU_SWITCH_VAULT, 1, UiText.label(this@MainActivity, "切换 Vault"))
             setOnMenuItemClickListener { item ->
-                when (item.title) {
-                    "设置" -> showSettings()
-                    else -> chooseVault()
+                when (item.itemId) {
+                    MENU_SETTINGS -> showSettings()
+                    MENU_SWITCH_VAULT -> chooseVault()
                 }
                 true
             }
@@ -647,7 +652,7 @@ class MainActivity : Activity() {
             background = colorBlock(COLOR_SURFACE)
             addView(action("‹  文件", false) { showVaultBrowser() })
             addView(TextView(this@MainActivity).apply {
-                text = "设置"
+                text = ui("设置")
                 textSize = 19f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
@@ -661,53 +666,61 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(4), dp(16), dp(24))
         }
-        sectionLabel(content, "同步")
+        sectionLabel(content, ui("同步"))
         val vaultId = repository.savedVaultUri()?.toString().orEmpty()
         val accountId = driveAuth.currentAccount()?.email.orEmpty()
         val driveRoot = drivePreferences.root(vaultId, accountId)
         val syncSnapshot = currentSyncSnapshot()
         val driveStatus = when {
-            syncSnapshot?.isRunning == true -> "${driveRoot?.name ?: syncSnapshot.targetName} · ${syncSnapshot.statusLabel()}"
-            driveRoot == null -> "未连接"
-            !driveAuth.isAuthorized(driveAuth.currentAccount()) -> "需要重新登录 · ${driveRoot.name}"
-            drivePreferences.lastSuccessAt(vaultId, driveRoot.id, accountId) > 0L -> "${driveRoot.name} · 上次同步 ${formatSyncTime(drivePreferences.lastSuccessAt(vaultId, driveRoot.id, accountId))}"
-            else -> "已选择 ${driveRoot.name}"
+            syncSnapshot?.isRunning == true -> getString(R.string.drive_status_running, driveRoot?.name ?: syncSnapshot.targetName, syncSnapshot.statusLabel(this))
+            driveRoot == null -> getString(R.string.drive_status_disconnected)
+            !driveAuth.isAuthorized(driveAuth.currentAccount()) -> getString(R.string.drive_status_sign_in, driveRoot.name)
+            drivePreferences.lastSuccessAt(vaultId, driveRoot.id, accountId) > 0L -> getString(R.string.drive_status_last_sync, driveRoot.name, formatSyncTime(drivePreferences.lastSuccessAt(vaultId, driveRoot.id, accountId)))
+            else -> getString(R.string.drive_status_selected, driveRoot.name)
         }
         content.addView(settingsRow("Google Drive", driveStatus, false) { showDriveSetup() }, matchWrap())
         syncSnapshot?.let { snapshot ->
-            content.addView(settingsRow("同步详情", snapshot.statusLabel(), false) { showSyncDetails() }, matchWrap().apply {
+            content.addView(settingsRow(ui("同步详情"), snapshot.statusLabel(this), false) { showSyncDetails() }, matchWrap().apply {
                 topMargin = dp(8)
             })
         }
-        sectionLabel(content, "每日笔记")
+        sectionLabel(content, ui("每日笔记"))
         val path = repository.dailyNoteDirectoryPath().ifBlank { "Vault 根目录" }
-        content.addView(settingsRow("今日笔记目录", path, false) { showDailyFolderPicker(true) }, matchWrap())
+        content.addView(settingsRow(ui("今日笔记目录"), path, false) { showDailyFolderPicker(true) }, matchWrap())
         content.addView(TextView(this).apply {
-            text = "设置不会移动已有笔记或附件。新建的每日笔记会按 yyyy-MM-dd.md 写入所选目录。"
+            text = ui("设置不会移动已有笔记或附件。新建的每日笔记会按 yyyy-MM-dd.md 写入所选目录。")
             textSize = 13f
             setTextColor(COLOR_MUTED_TEXT)
             setPadding(dp(6), dp(12), dp(6), 0)
         }, matchWrap())
-        sectionLabel(content, "存储")
+        sectionLabel(content, ui("存储"))
         content.addView(trashSettingsRow(), matchWrap())
-        sectionLabel(content, "显示")
+        sectionLabel(content, ui("显示"))
         val appearance = repository.appearanceMode()
-        content.addView(settingsRow("日间模式", "浅色背景与深色文字", appearance == VaultRepository.APPEARANCE_DAY) {
+        content.addView(settingsRow(ui("日间模式"), ui("浅色背景与深色文字"), appearance == VaultRepository.APPEARANCE_DAY) {
             setAppearance(VaultRepository.APPEARANCE_DAY)
         }, matchWrap().apply { bottomMargin = dp(8) })
-        content.addView(settingsRow("夜间模式", "深色工作区与深色编辑纸面", appearance == VaultRepository.APPEARANCE_NIGHT) {
+        content.addView(settingsRow(ui("夜间模式"), ui("深色工作区与深色编辑纸面"), appearance == VaultRepository.APPEARANCE_NIGHT) {
             setAppearance(VaultRepository.APPEARANCE_NIGHT)
         }, matchWrap())
-        sectionLabel(content, "语言")
-        content.addView(settingsStatusRow("中文", "当前应用语言", "已启用  ✓", true), matchWrap().apply {
+        sectionLabel(content, ui("语言"))
+        val selectedLanguage = UiLanguage.selected(this)
+        content.addView(settingsRow(getString(R.string.language_system), "中文 / English", selectedLanguage == UiLanguage.SYSTEM) {
+            setLanguage(UiLanguage.SYSTEM)
+        }, matchWrap().apply { bottomMargin = dp(8) })
+        content.addView(settingsRow(getString(R.string.language_chinese), if (selectedLanguage == UiLanguage.CHINESE) getString(R.string.language_current_zh) else getString(R.string.language_switch_zh), selectedLanguage == UiLanguage.CHINESE) {
+            setLanguage(UiLanguage.CHINESE)
+        }, matchWrap().apply {
             bottomMargin = dp(8)
         })
-        content.addView(settingsStatusRow("English", "完整英文翻译即将支持", "即将支持", false), matchWrap())
-        sectionLabel(content, "关于")
+        content.addView(settingsRow(getString(R.string.language_english), if (selectedLanguage == UiLanguage.ENGLISH) getString(R.string.language_current_en) else getString(R.string.language_switch_en), selectedLanguage == UiLanguage.ENGLISH) {
+            setLanguage(UiLanguage.ENGLISH)
+        }, matchWrap())
+        sectionLabel(content, ui("关于"))
         content.addView(
             settingsStatusRow(
-                "版本",
-                "v${BuildConfig.VERSION_NAME} · 构建 ${BuildConfig.VERSION_CODE}",
+                ui("版本"),
+                getString(R.string.about_build, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
                 getString(R.string.app_name),
                 false
             ),
@@ -912,6 +925,13 @@ class MainActivity : Activity() {
         showSettings()
     }
 
+    private fun setLanguage(language: String) {
+        if (UiLanguage.selected(this) == language) return
+        UiLanguage.set(this, language)
+        // Recreation refreshes every screen, dialog and notification resource immediately.
+        recreate()
+    }
+
     private fun showDriveSetup(message: String? = null) {
         releaseEditor()
         screen = Screen.DRIVE_SETUP
@@ -960,7 +980,7 @@ class MainActivity : Activity() {
                     content.addView(action("比较并同步", true) { showDriveSyncConfirmation(selectedRoot) }, matchWrap())
                 }
                 syncSnapshot?.let { snapshot ->
-                    content.addView(settingsRow("同步详情", snapshot.statusLabel(), false) { showSyncDetails() }, matchWrap().apply {
+                    content.addView(settingsRow("同步详情", snapshot.statusLabel(this), false) { showSyncDetails() }, matchWrap().apply {
                         topMargin = dp(8)
                     })
                 }
@@ -1212,7 +1232,7 @@ class MainActivity : Activity() {
     private fun showSyncDetails() {
         screen = Screen.DRIVE_DETAILS
         val root = pageRoot(COLOR_BACKGROUND)
-        root.addView(simpleToolbar("‹  设置", "同步详情") { showSettings() }, matchWrap())
+        root.addView(simpleToolbar(ui("‹  设置"), ui("同步详情")) { showSettings() }, matchWrap())
         val scroll = ScrollView(this)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1220,7 +1240,7 @@ class MainActivity : Activity() {
         }
         val snapshot = currentSyncSnapshot()
         if (snapshot == null) {
-            content.addView(emptyState("尚无同步记录。开始 Google Drive 同步后，可在这里查看进度和结果。"), matchWrap())
+            content.addView(emptyState(ui("尚无同步记录。开始 Google Drive 同步后，可在这里查看进度和结果。")), matchWrap())
             content.addView(action("返回设置", true) { showSettings() }, matchWrap().apply { topMargin = dp(16) })
             scroll.addView(content, LinearLayout.LayoutParams(-1, -2))
             root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -1228,19 +1248,37 @@ class MainActivity : Activity() {
             return
         }
         content.addView(TextView(this).apply {
-            text = snapshot.statusLabel()
+            text = snapshot.statusLabel(this@MainActivity)
             textSize = 22f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_PRIMARY_TEXT)
         }, matchWrap())
         content.addView(TextView(this).apply {
-            text = "${snapshot.providerName}：${snapshot.targetName}\n开始：${formatSyncTime(snapshot.startedAt)}\n${if (snapshot.finishedAt > 0) "结束：${formatSyncTime(snapshot.finishedAt)}\n" else ""}${snapshot.message}\n\n进度 ${snapshot.completed} / ${snapshot.total}\n上传 ${snapshot.summary.uploaded} 个，下载 ${snapshot.summary.downloaded} 个，未变更 ${snapshot.summary.unchanged} 个，冲突 ${snapshot.summary.conflicts} 个。\n\n同步期间可继续编辑本地文件；下次同步会比较之后保存的改动。"
+            val finished = if (snapshot.finishedAt > 0) getString(R.string.sync_finished_prefix, formatSyncTime(snapshot.finishedAt)) else ""
+            text = getString(
+                R.string.sync_details,
+                snapshot.providerName,
+                snapshot.targetName,
+                formatSyncTime(snapshot.startedAt),
+                finished,
+                snapshot.messageLabel(this@MainActivity),
+                snapshot.completed,
+                snapshot.total,
+                snapshot.summary.uploaded,
+                snapshot.summary.downloaded,
+                snapshot.summary.unchanged,
+                snapshot.summary.conflicts
+            )
             textSize = 15f
             setTextColor(COLOR_SECONDARY_TEXT)
             setPadding(0, dp(12), 0, dp(12))
         }, matchWrap())
         if (snapshot.errors.isNotEmpty()) {
-            content.addView(infoBanner("以下文件需要处理：\n${snapshot.errors.joinToString("\n")}"), matchWrap().apply {
+            val details = snapshot.errors.joinToString("\n") { error -> when (error.code) {
+                SyncErrorCode.ITEM_FAILED -> getString(R.string.sync_error_item, error.path.ifBlank { snapshot.targetName })
+                SyncErrorCode.INTERRUPTED -> getString(R.string.sync_error_interrupted)
+            } }
+            content.addView(infoBanner("${getString(R.string.sync_errors_heading)}\n$details"), matchWrap().apply {
                 bottomMargin = dp(12)
             })
         }
@@ -1267,8 +1305,8 @@ class MainActivity : Activity() {
         val generation = ++dailyFolderLoadGeneration
         val requestedDirectory = dailyFolderDirectory
         val loading = pageRoot(COLOR_BACKGROUND)
-        loading.addView(simpleToolbar("‹  设置", "选择今日笔记目录") { showSettings() }, matchWrap())
-        loading.addView(emptyState("正在读取 Vault 文件夹…"), matchWrap().apply {
+        loading.addView(simpleToolbar(ui("‹  设置"), ui("选择今日笔记目录")) { showSettings() }, matchWrap())
+        loading.addView(emptyState(ui("正在读取 Vault 文件夹…")), matchWrap().apply {
             leftMargin = dp(16)
             rightMargin = dp(16)
             topMargin = dp(20)
@@ -2899,12 +2937,12 @@ class MainActivity : Activity() {
         source: VaultSearchSource? = null
     ): String {
         val today = SimpleDateFormat("yyyy-MM-dd'.md'", Locale.US).format(Date())
-        val daily = if (VaultSearchPolicy.isDailyNote(note.relativePath, repository.dailyNoteDirectoryPath(), today)) "今日笔记" else null
+        val daily = if (VaultSearchPolicy.isDailyNote(note.relativePath, repository.dailyNoteDirectoryPath(), today)) ui("今日笔记") else null
         val time = VaultSearchPolicy.relativeTime(note.lastModified, System.currentTimeMillis())
         val sourceLabel = when (source) {
-            VaultSearchSource.FILENAME -> "标题匹配"
-            VaultSearchSource.TAG -> "标签匹配"
-            VaultSearchSource.BODY -> "正文匹配"
+            VaultSearchSource.FILENAME -> ui("标题匹配")
+            VaultSearchSource.TAG -> ui("标签匹配")
+            VaultSearchSource.BODY -> ui("正文匹配")
             null -> null
         }
         return listOfNotNull(daily, time, sourceLabel, preview.takeIf { it.isNotBlank() }).joinToString(" · ")
@@ -2916,10 +2954,10 @@ class MainActivity : Activity() {
         minimumHeight = dp(52)
         setPadding(dp(14), dp(6), dp(8), dp(6))
         background = rounded(COLOR_ROW, dp(12))
-        contentDescription = "提示：左滑条目可重命名或移到回收站；长按也可操作。"
+        contentDescription = ui("提示：左滑条目可重命名或移到回收站；长按也可操作。")
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         addView(TextView(this@MainActivity).apply {
-            text = "左滑条目可重命名或移到回收站；长按也可操作"
+            text = ui("左滑条目可重命名或移到回收站；长按也可操作")
             textSize = 13f
             setTextColor(COLOR_SECONDARY_TEXT)
         }, LinearLayout.LayoutParams(0, -2, 1f))
@@ -2927,7 +2965,7 @@ class MainActivity : Activity() {
             (parent as? android.view.ViewGroup)?.removeView(this)
         }, wrapWrap())
         repository.markSwipeDiscoveryHintSeen()
-        post { announceForAccessibility("提示：左滑条目可重命名或移到回收站；长按也可操作。") }
+        post { announceForAccessibility(ui("提示：左滑条目可重命名或移到回收站；长按也可操作。")) }
     }
 
     private fun vaultGroup(rows: List<View>): View = LinearLayout(this).apply {
@@ -3081,7 +3119,7 @@ class MainActivity : Activity() {
         color: Int,
         onClick: () -> Unit
     ): TextView = TextView(this).apply {
-        text = label
+        text = UiText.label(this@MainActivity, label)
         textSize = SWIPE_ACTION_TEXT_SP
         typeface = Typeface.DEFAULT_BOLD
         gravity = Gravity.CENTER
@@ -3093,7 +3131,7 @@ class MainActivity : Activity() {
         background = rounded(color, 0)
         isClickable = true
         isFocusable = true
-        contentDescription = accessibilityLabel
+        contentDescription = UiText.label(this@MainActivity, accessibilityLabel)
         setOnClickListener { onClick() }
     }
 
@@ -3131,7 +3169,7 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(0, -2, 1f))
         if (selected) {
             addView(TextView(this@MainActivity).apply {
-                text = "已启用  ✓"
+                text = ui("已启用  ✓")
                 textSize = 13f
                 gravity = Gravity.CENTER
                 setTextColor(COLOR_ACCENT)
@@ -3194,7 +3232,7 @@ class MainActivity : Activity() {
     }
 
     private fun action(label: String, primary: Boolean, onClick: () -> Unit): TextView = TextView(this).apply {
-        text = label
+        text = UiText.label(this@MainActivity, label)
         textSize = 14f
         typeface = if (primary) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         gravity = Gravity.CENTER
@@ -3204,7 +3242,7 @@ class MainActivity : Activity() {
         background = rippleBackground(if (primary) COLOR_ACCENT else COLOR_ROW, dp(12))
         isClickable = true
         isFocusable = true
-        contentDescription = label
+        contentDescription = UiText.label(this@MainActivity, label)
         setOnClickListener { onClick() }
     }
 
@@ -3217,8 +3255,8 @@ class MainActivity : Activity() {
         background = rippleBackground(COLOR_ROW, dp(12))
         isClickable = true
         isFocusable = true
-        contentDescription = label
-        tooltipText = label
+        contentDescription = UiText.label(this@MainActivity, label)
+        tooltipText = UiText.label(this@MainActivity, label)
         setOnClickListener { onClick(this) }
     }
 
@@ -3235,6 +3273,9 @@ class MainActivity : Activity() {
             .orEmpty()
         return if (value.isBlank()) "空白笔记" else value.take(88)
     }
+
+    /** Use only for developer-authored presentation strings; never pass Vault-derived values here. */
+    private fun ui(source: String): String = UiText.label(this, source)
 
     private fun decodeJavascriptString(value: String): String = try {
         org.json.JSONTokener(value).nextValue() as? String ?: ""
@@ -3295,7 +3336,11 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun formatSyncTime(time: Long): String =
-        SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date(time))
+        java.text.DateFormat.getDateTimeInstance(
+            java.text.DateFormat.SHORT,
+            java.text.DateFormat.SHORT,
+            UiLanguage.locale(this)
+        ).format(Date(time))
 
     private fun isNightTheme(): Boolean = repository.appearanceMode() == VaultRepository.APPEARANCE_NIGHT
 
@@ -3304,7 +3349,7 @@ class MainActivity : Activity() {
         if (isNightTheme()) R.style.AppTheme_Dialog_Night else R.style.AppTheme_Dialog_Light
     )
 
-    private fun dialogBuilder(): AlertDialog.Builder = AlertDialog.Builder(dialogContext())
+    private fun dialogBuilder(): AlertDialog.Builder = LocalizedAlertDialogBuilder(dialogContext())
 
     private fun applyWindowColors() {
         window.statusBarColor = COLOR_SURFACE
@@ -3375,5 +3420,7 @@ class MainActivity : Activity() {
         private const val VIDEO_STAGE_COPYING = "copying"
         private const val VIDEO_STAGE_ATTACHMENT_WRITTEN = "attachment_written"
         private const val VIDEO_STAGE_NOTE_SAVED = "note_saved"
+        private const val MENU_SETTINGS = 1
+        private const val MENU_SWITCH_VAULT = 2
     }
 }

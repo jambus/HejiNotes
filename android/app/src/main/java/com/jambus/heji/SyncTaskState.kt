@@ -8,6 +8,11 @@ enum class SyncTaskStatus {
     RUNNING, SUCCEEDED, FAILED, CANCELLED, INTERRUPTED
 }
 
+/** Stable, locale-neutral lifecycle markers stored in preferences instead of rendered text. */
+enum class SyncMessageCode { PREPARING, PROGRESS, CANCELLING, COMPLETED, PARTIAL_FAILURE, CANCELLED, INTERRUPTED }
+enum class SyncErrorCode { ITEM_FAILED, INTERRUPTED }
+data class SyncErrorDetail(val code: SyncErrorCode, val path: String = "")
+
 data class SyncTaskSummary(
     val uploaded: Int = 0,
     val downloaded: Int = 0,
@@ -26,21 +31,33 @@ data class SyncTaskSnapshot(
     val status: SyncTaskStatus,
     val completed: Int,
     val total: Int,
-    val message: String,
+    val messageCode: SyncMessageCode,
     val startedAt: Long,
     val finishedAt: Long,
     val summary: SyncTaskSummary = SyncTaskSummary(),
-    val errors: List<String> = emptyList(),
+    /** Locale-neutral diagnostics retained for settings details after a process restart. */
+    val errors: List<SyncErrorDetail> = emptyList(),
+    val errorCount: Int = 0,
     val vaultId: String = ""
 ) {
     val isRunning: Boolean get() = status == SyncTaskStatus.RUNNING
 
-    fun statusLabel(): String = when (status) {
-        SyncTaskStatus.RUNNING -> if (total > 0) "正在同步 $completed / $total" else "正在后台同步"
-        SyncTaskStatus.SUCCEEDED -> "同步完成"
-        SyncTaskStatus.FAILED -> "同步未完全完成"
-        SyncTaskStatus.CANCELLED -> "同步已取消"
-        SyncTaskStatus.INTERRUPTED -> "同步已中断，需要重试"
+    fun statusLabel(context: Context): String = when (status) {
+        SyncTaskStatus.RUNNING -> if (total > 0) context.getString(R.string.sync_running_count, completed, total) else context.getString(R.string.sync_running)
+        SyncTaskStatus.SUCCEEDED -> context.getString(R.string.sync_complete)
+        SyncTaskStatus.FAILED -> context.getString(R.string.sync_incomplete)
+        SyncTaskStatus.CANCELLED -> context.getString(R.string.sync_cancelled)
+        SyncTaskStatus.INTERRUPTED -> context.getString(R.string.sync_interrupted)
+    }
+
+    fun messageLabel(context: Context): String = when (messageCode) {
+        SyncMessageCode.PREPARING -> context.getString(R.string.sync_preparing)
+        SyncMessageCode.PROGRESS -> statusLabel(context)
+        SyncMessageCode.CANCELLING -> context.getString(R.string.sync_cancelling)
+        SyncMessageCode.COMPLETED -> context.getString(R.string.sync_complete)
+        SyncMessageCode.PARTIAL_FAILURE -> context.getString(R.string.sync_incomplete_count, errorCount)
+        SyncMessageCode.CANCELLED -> context.getString(R.string.sync_cancelled)
+        SyncMessageCode.INTERRUPTED -> context.getString(R.string.sync_interrupted)
     }
 }
 
@@ -61,7 +78,7 @@ class SyncTaskStateStore(context: Context) {
             status = SyncTaskStatus.RUNNING,
             completed = 0,
             total = 0,
-            message = "正在准备同步…",
+            messageCode = SyncMessageCode.PREPARING,
             startedAt = System.currentTimeMillis(),
             finishedAt = 0L,
             vaultId = vaultId
@@ -72,12 +89,12 @@ class SyncTaskStateStore(context: Context) {
     fun updateProgress(progress: DriveSyncProgress): SyncTaskSnapshot? = snapshot()?.takeIf { it.isRunning }?.copy(
         completed = progress.completed,
         total = progress.total,
-        message = progress.message
+        messageCode = SyncMessageCode.PROGRESS
     )?.also(::save)
 
     @Synchronized
     fun requestCancellation(): SyncTaskSnapshot? = snapshot()?.takeIf { it.isRunning }?.copy(
-        message = "将在当前文件完成后取消…"
+        messageCode = SyncMessageCode.CANCELLING
     )?.also(::save)
 
     @Synchronized
@@ -87,26 +104,27 @@ class SyncTaskStateStore(context: Context) {
             result.errors.isNotEmpty() -> SyncTaskStatus.FAILED
             else -> SyncTaskStatus.SUCCEEDED
         },
-        message = finishMessage(result),
+        messageCode = finishMessageCode(result),
         finishedAt = System.currentTimeMillis(),
         summary = SyncTaskSummary(result.uploaded, result.downloaded, result.unchanged, result.conflicts),
-        errors = result.errors.take(MAX_ERROR_DETAILS)
+        errors = result.errors.take(MAX_ERROR_DETAILS).map { SyncErrorDetail(SyncErrorCode.ITEM_FAILED, safePath(it)) },
+        errorCount = result.errors.size
     )?.also(::save)
 
     /** A new service instance means an earlier running task cannot be trusted to have completed. */
     @Synchronized
     fun markInterruptedIfRunning(): SyncTaskSnapshot? = snapshot()?.takeIf { it.isRunning }?.copy(
         status = SyncTaskStatus.INTERRUPTED,
-        message = "后台同步已中断，请重试",
+        messageCode = SyncMessageCode.INTERRUPTED,
         finishedAt = System.currentTimeMillis(),
-        errors = listOf("应用或系统中断了后台同步；本地文件保持不变，请重新开始同步。")
+        errors = listOf(SyncErrorDetail(SyncErrorCode.INTERRUPTED)),
+        errorCount = 1
     )?.also(::save)
 
-    private fun finishMessage(result: DriveSyncResult): String = when {
-        result.cancelled -> "同步已取消"
-        result.errors.isNotEmpty() -> "${result.errors.size} 个文件未完成"
-        result.conflicts > 0 -> "同步完成，已保留冲突副本"
-        else -> "同步完成"
+    private fun finishMessageCode(result: DriveSyncResult): SyncMessageCode = when {
+        result.cancelled -> SyncMessageCode.CANCELLED
+        result.errors.isNotEmpty() -> SyncMessageCode.PARTIAL_FAILURE
+        else -> SyncMessageCode.COMPLETED
     }
 
     private fun save(value: SyncTaskSnapshot) {
@@ -120,40 +138,62 @@ class SyncTaskStateStore(context: Context) {
         put("status", value.status.name)
         put("completed", value.completed)
         put("total", value.total)
-        put("message", value.message)
+        put("messageCode", value.messageCode.name)
         put("startedAt", value.startedAt)
         put("finishedAt", value.finishedAt)
         put("uploaded", value.summary.uploaded)
         put("downloaded", value.summary.downloaded)
         put("unchanged", value.summary.unchanged)
         put("conflicts", value.summary.conflicts)
-        put("errors", JSONArray(value.errors))
+        put("errors", JSONArray(value.errors.map { JSONObject().put("code", it.code.name).put("path", it.path) }))
+        put("errorCount", value.errorCount)
         put("vaultId", value.vaultId)
     }
 
     private fun decode(raw: String): SyncTaskSnapshot? = try {
         val value = JSONObject(raw)
-        val errors = value.optJSONArray("errors") ?: JSONArray()
+        val status = SyncTaskStatus.valueOf(value.getString("status"))
         SyncTaskSnapshot(
             providerId = value.getString("providerId"),
             providerName = value.getString("providerName"),
             targetName = value.getString("targetName"),
-            status = SyncTaskStatus.valueOf(value.getString("status")),
+            status = status,
             completed = value.optInt("completed"),
             total = value.optInt("total"),
-            message = value.optString("message"),
+            messageCode = value.optString("messageCode").takeIf { it.isNotBlank() }?.let(SyncMessageCode::valueOf)
+                ?: if (status == SyncTaskStatus.RUNNING) SyncMessageCode.PROGRESS else when (status) {
+                    SyncTaskStatus.SUCCEEDED -> SyncMessageCode.COMPLETED
+                    SyncTaskStatus.FAILED -> SyncMessageCode.PARTIAL_FAILURE
+                    SyncTaskStatus.CANCELLED -> SyncMessageCode.CANCELLED
+                    SyncTaskStatus.INTERRUPTED -> SyncMessageCode.INTERRUPTED
+                    SyncTaskStatus.RUNNING -> SyncMessageCode.PROGRESS
+                },
             startedAt = value.optLong("startedAt"),
             finishedAt = value.optLong("finishedAt"),
             summary = SyncTaskSummary(
                 value.optInt("uploaded"), value.optInt("downloaded"),
                 value.optInt("unchanged"), value.optInt("conflicts")
             ),
-            errors = List(errors.length()) { errors.optString(it) }.filter { it.isNotBlank() },
+            errors = (value.optJSONArray("errors") ?: JSONArray()).let { errors ->
+                List(errors.length()) { index -> errors.optJSONObject(index) }.filterNotNull().mapNotNull { error ->
+                    error.optString("code").let { code -> runCatching { SyncErrorCode.valueOf(code) }.getOrNull() }
+                        ?.let { code -> SyncErrorDetail(code, error.optString("path")) }
+                }
+            },
+            errorCount = value.optInt("errorCount"),
             vaultId = value.optString("vaultId")
         )
     } catch (_: Exception) {
         null
     }
+
+    /** Persist only a Vault-relative, syntax-checked path parameter; never a localized failure message. */
+    private fun safePath(error: String): String = Regex("[A-Za-z0-9._/-]+(?:\\.[A-Za-z0-9]+)?")
+        .findAll(error)
+        .map { it.value }
+        .lastOrNull { it.contains('/') || it.endsWith(".md", true) || it.endsWith(".jpg", true) || it.endsWith(".mp4", true) }
+        ?.takeIf { it.length <= 240 && !it.startsWith('/') && !it.contains("..") }
+        .orEmpty()
 
     companion object {
         private const val PREFERENCES_NAME = "heji_notes_sync_tasks"

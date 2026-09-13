@@ -307,17 +307,20 @@ class SwipeActionRow(
     } else {
       View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
     }
-    val state = if (open) "操作已展开" else "操作已收起"
+    val state = UiText.label(context, if (open) "操作已展开" else "操作已收起")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) content.stateDescription = state
     content.contentDescription = "$rowAccessibilityLabel，$state"
-    if (announce) announceForAccessibility("$rowTitle，已显示重命名和移到回收站操作")
+    if (announce) announceForAccessibility(
+      if (UiLanguage.locale(context).language == "zh") "$rowTitle，已显示重命名和移到回收站操作" else "$rowTitle, rename and move-to-Trash actions shown"
+    )
   }
 
   private fun accessibilityDelegate(): View.AccessibilityDelegate = object : View.AccessibilityDelegate() {
     override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
       super.onInitializeAccessibilityNodeInfo(host, info)
-      info.addAction(AccessibilityNodeInfo.AccessibilityAction(renameActionId, "重命名 $rowTitle"))
-      info.addAction(AccessibilityNodeInfo.AccessibilityAction(trashActionId, "移到回收站 $rowTitle"))
+      val english = UiLanguage.locale(context).language != "zh"
+      info.addAction(AccessibilityNodeInfo.AccessibilityAction(renameActionId, if (english) "Rename $rowTitle" else "重命名 $rowTitle"))
+      info.addAction(AccessibilityNodeInfo.AccessibilityAction(trashActionId, if (english) "Move $rowTitle to Trash" else "移到回收站 $rowTitle"))
     }
 
     override fun performAccessibilityAction(host: View, action: Int, arguments: android.os.Bundle?): Boolean {

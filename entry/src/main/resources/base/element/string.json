@@ -2,7 +2,7 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "本地优先的 Markdown 笔记本"
+      "value": "Local-first Markdown notebook"
     },
     {
       "name": "EntryAbility_desc",
@@ -12,6 +12,26 @@
       "name": "EntryAbility_label",
       "value": "Heji Notes"
     },
+    { "name": "ui_saved", "value": "Saved" },
+    { "name": "ui_unsaved", "value": "Unsaved" },
+    { "name": "ui_saving", "value": "Saving…" },
+    { "name": "ui_save_failed", "value": "Save failed" },
+    { "name": "ui_no_vault", "value": "No Vault selected" },
+    { "name": "ui_opening", "value": "Opening…" },
+    { "name": "ui_choose_vault", "value": "Choose Vault" },
+    { "name": "ui_local_vault", "value": "Local Obsidian Vault" },
+    { "name": "ui_search", "value": "Search title or content" },
+    { "name": "ui_connect_vault", "value": "Connect an Obsidian Vault first" },
+    { "name": "ui_no_notes", "value": "No notes yet" },
+    { "name": "ui_create_daily", "value": "Create daily note" },
+    { "name": "ui_new_daily", "value": "New daily note" },
+    { "name": "ui_no_results", "value": "No matching notes" },
+    { "name": "ui_back", "value": "Back" }, { "name": "ui_save", "value": "Save" },
+    { "name": "ui_cancel", "value": "Cancel" }, { "name": "ui_language", "value": "Language" },
+    { "name": "ui_enabled", "value": "Enabled" }, { "name": "ui_chinese", "value": "中文" },
+    { "name": "ui_english", "value": "English" }, { "name": "ui_take_photo", "value": "Take and insert photo" },
+    { "name": "ui_adjust_photo", "value": "Adjust photo" }, { "name": "ui_crop_correct", "value": "Crop and correct" },
+    { "name": "ui_vault_help", "value": "Notes are saved directly as Markdown files for Obsidian on your computer." }, { "name": "ui_create_today_help", "value": "Create today’s note and capture what is in front of you." }, { "name": "ui_search_help", "value": "Try a different title or content keyword" }, { "name": "ui_title_hint", "value": "Daily note title" }, { "name": "ui_rich_text", "value": "Rich text" }, { "name": "ui_processing", "value": "Processing…" }, { "name": "ui_reset_rectangle", "value": "Reset rectangle" }, { "name": "ui_insert_original", "value": "Insert original" }, { "name": "ui_vault_connected", "value": "Vault connected" }, { "name": "ui_choose_vault_first", "value": "Choose an Obsidian Vault first" }, { "name": "ui_create_failed", "value": "Could not create today’s note" }, { "name": "ui_pick_file", "value": "On mobile, select any Markdown file inside the Vault" }, { "name": "ui_vault_unreadable", "value": "Cannot open this Vault. Select a readable, writable folder." }, { "name": "ui_saved_to_vault", "value": "Saved to Vault" }, { "name": "ui_save_error", "value": "Save failed. Check Vault access and storage." }, { "name": "ui_photo_failed", "value": "Photo was not completed. Try again." }, { "name": "ui_corrected_saved", "value": "Original and corrected photos saved" }, { "name": "ui_photo_saved", "value": "Photo inserted and saved" }, { "name": "ui_correction_failed", "value": "Photo correction failed. Take the photo again." },
     {
       "name": "onedrive_client_id",
       "value": "REPLACE_WITH_ENTRA_CLIENT_ID"

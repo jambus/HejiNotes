@@ -3,7 +3,7 @@
 ## Technical Context
 
 - Kotlin Android 工程位于 `android/`，使用项目内 Gradle Wrapper。
-- 当前开发版本为 `versionName 0.5.0`、`versionCode 9`；后续候选版本按
+- 当前开发版本为 `versionName 0.5.1`、`versionCode 10`；该版本为未发布开发基线，后续候选版本按
   [`docs/RELEASE_NOTES.md`](../../RELEASE_NOTES.md) 的规则提升并记录。
 - 通过 Storage Access Framework 选择 Vault 并持久化目录 URI 权限。
 - 通过 Activity Result API 拉起系统相机并复制返回内容。
@@ -20,7 +20,8 @@
 6. 以 Vault 文件库作为启动页，提供目录浏览、笔记列表与保留上下文的编辑器导航。
 7. 增加设置页，持久保存显示模式和每日笔记目录；目录变更只影响后续每日笔记的创建位置与相对链接计算。
 8. 根据 UI 评审完成拍照处理默认选区、模式选中态、原编辑位置插入、持续写入反馈、文件库恢复状态和跨端视觉语义统一。
-9. 在设置页显示版本、构建号和当前语言能力；中文为首发语言，完整中英文国际化作为后续独立交付。
+9. 在设置页显示版本、构建号和应用语言；以 Android 资源与统一呈现文案覆盖中文和
+   English，提供跟随系统/明确语言偏好、即时应用和重启恢复，且不改变 Vault 数据或配置。
 10. 将当前已实现功能归档为 Android APK `0.1.0` 开发基线，并在每次候选构建前同步
     release notes、平台规格、`versionName` 与单调递增的 `versionCode`。
 11. 在设置页新增“存储”分组，后台统计 `.trash/` 直接内容；空回收站禁用操作，非空时

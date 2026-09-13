@@ -125,8 +125,8 @@ class BackgroundSyncService : Service() {
 
     private fun notification(snapshot: SyncTaskSnapshot, ongoing: Boolean) = android.app.Notification.Builder(this, CHANNEL_ID)
         .setSmallIcon(R.drawable.app_icon)
-        .setContentTitle("${snapshot.providerName} 同步")
-        .setContentText(if (ongoing) snapshot.statusLabel() else snapshot.message)
+        .setContentTitle(getString(R.string.sync_notification_title, snapshot.providerName))
+        .setContentText(if (ongoing) snapshot.statusLabel(this) else snapshot.messageLabel(this))
         .setStyle(android.app.Notification.BigTextStyle().bigText(notificationDetail(snapshot)))
         .setContentIntent(PendingIntent.getActivity(
             this,
@@ -139,12 +139,15 @@ class BackgroundSyncService : Service() {
         .build()
 
     private fun notificationDetail(snapshot: SyncTaskSnapshot): String = buildString {
-        append(snapshot.statusLabel())
+        append(snapshot.statusLabel(this@BackgroundSyncService))
         if (!snapshot.isRunning) {
-            append("\n上传 ").append(snapshot.summary.uploaded)
-            append("，下载 ").append(snapshot.summary.downloaded)
-            append("，冲突 ").append(snapshot.summary.conflicts)
-            if (snapshot.errors.isNotEmpty()) append("\n请在应用内查看失败详情")
+            append('\n').append(getString(
+                R.string.sync_notification_detail,
+                snapshot.summary.uploaded,
+                snapshot.summary.downloaded,
+                snapshot.summary.conflicts
+            ))
+            if (snapshot.errorCount > 0) append("\n").append(UiText.label(this@BackgroundSyncService, "请在应用内查看失败详情"))
         }
     }
 
@@ -155,9 +158,9 @@ class BackgroundSyncService : Service() {
     private fun createChannel() {
         notifications.createNotificationChannel(NotificationChannel(
             CHANNEL_ID,
-            "同步状态",
+            UiText.label(this, "同步状态"),
             NotificationManager.IMPORTANCE_DEFAULT
-        ).apply { description = "禾记后台同步的进度、完成和错误通知" })
+        ).apply { description = if (UiLanguage.locale(this@BackgroundSyncService).language == "zh") "禾记后台同步的进度、完成和错误通知" else "Heji background sync progress, completion, and error notifications" })
     }
 
     companion object {

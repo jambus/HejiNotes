@@ -2,4 +2,34 @@
 <resources>
     <string name="app_name">禾记</string>
     <string name="brand_mark">禾</string>
+    <string name="language">语言</string>
+    <string name="language_chinese">中文</string>
+    <string name="language_english">English</string>
+    <string name="language_system">跟随系统</string>
+    <string name="language_current_zh">已启用 ✓</string>
+    <string name="language_current_en">已启用 ✓</string>
+    <string name="language_switch_zh">切换为中文</string>
+    <string name="language_switch_en">切换为 English</string>
+    <string name="sync_running">正在后台同步</string>
+    <string name="sync_running_count">正在同步 %1$d / %2$d</string>
+    <string name="sync_complete">同步完成</string>
+    <string name="sync_incomplete">同步未完全完成</string>
+    <string name="sync_incomplete_count">%1$d 个项目未完成</string>
+    <string name="sync_cancelled">同步已取消</string>
+    <string name="sync_interrupted">同步已中断，需要重试</string>
+    <string name="sync_preparing">正在准备同步…</string>
+    <string name="sync_cancelling">将在当前项目完成后取消…</string>
+    <string name="sync_notification_title">%1$s 同步</string>
+    <string name="sync_notification_detail">上传 %1$d · 下载 %2$d · 冲突 %3$d</string>
+    <string name="drive_status_running">%1$s · %2$s</string>
+    <string name="drive_status_sign_in">需要重新登录 · %1$s</string>
+    <string name="drive_status_last_sync">%1$s · 上次同步 %2$s</string>
+    <string name="drive_status_selected">已选择 %1$s</string>
+    <string name="drive_status_disconnected">未连接</string>
+    <string name="sync_details">%1$s：%2$s\n开始：%3$s\n%4$s%5$s\n\n进度 %6$d / %7$d\n上传 %8$d · 下载 %9$d · 未变更 %10$d · 冲突 %11$d。\n\n同步期间可继续编辑本地文件；下次同步会比较之后保存的改动。</string>
+    <string name="sync_finished_prefix">结束：%1$s\n</string>
+    <string name="sync_errors_heading">以下项目需要处理：</string>
+    <string name="sync_error_item">无法同步 %1$s</string>
+    <string name="sync_error_interrupted">应用或系统中断了同步；本地文件保持不变。</string>
+    <string name="about_build">v%1$s · 构建 %2$d</string>
 </resources>

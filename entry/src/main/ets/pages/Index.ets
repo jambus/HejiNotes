@@ -26,11 +26,12 @@ struct Index {
   @State private searchQuery: string = '';
   @State private selectedNote: Note = new Note('', '', '', 0);
   @State private title: string = '';
-  @State private saveStatus: string = '已保存';
+  /** A semantic state code, never a translated presentation string. */
+  @State private saveStatus: string = 'saved';
   @State private mode: ScreenMode = ScreenMode.LIST;
   @State private isCapturing: boolean = false;
   @State private isPickingVault: boolean = false;
-  @State private vaultLabel: string = '尚未选择 Vault';
+  @State private vaultLabel: string = '';
   @State private photoEditorVisible: boolean = false;
   @State private pendingAttachment: AttachmentResult = new AttachmentResult('', '', '', '', '');
   @State private photoPoints: Array<PhotoPoint> = Index.defaultPhotoPoints();
@@ -67,6 +68,29 @@ struct Index {
     this.refreshNotes();
   }
 
+  /** Keep UI selection semantic: persisted Markdown, file names and attachment markup never pass here. */
+  private t(key: string): string {
+    // Static keys use the selected app language's resource bundle; no Vault data enters this path.
+    const resourceName = this.resourceName(key);
+    const context = getContext(this) as common.UIAbilityContext;
+    return context.resourceManager.getStringByNameSync(resourceName);
+  }
+
+  private resourceName(key: string): string {
+    switch (key) {
+      case 'saved': return 'ui_saved'; case 'unsaved': return 'ui_unsaved'; case 'saving': return 'ui_saving'; case 'saveFailed': return 'ui_save_failed';
+      case 'noVault': return 'ui_no_vault'; case 'opening': return 'ui_opening'; case 'chooseVault': return 'ui_choose_vault';
+      case 'localVault': return 'ui_local_vault'; case 'search': return 'ui_search'; case 'connectVault': return 'ui_connect_vault';
+      case 'noNotes': return 'ui_no_notes'; case 'createDaily': return 'ui_create_daily'; case 'newDaily': return 'ui_new_daily';
+      case 'noResults': return 'ui_no_results'; case 'back': return 'ui_back'; case 'save': return 'ui_save'; case 'cancel': return 'ui_cancel';
+      case 'language': return 'ui_language'; case 'enabled': return 'ui_enabled'; case 'chinese': return 'ui_chinese'; case 'english': return 'ui_english';
+      case 'takePhoto': return 'ui_take_photo'; case 'adjustPhoto': return 'ui_adjust_photo'; case 'cropCorrect': return 'ui_crop_correct';
+      case 'vaultHelp': return 'ui_vault_help'; case 'createTodayHelp': return 'ui_create_today_help'; case 'searchHelp': return 'ui_search_help'; case 'titleHint': return 'ui_title_hint'; case 'richText': return 'ui_rich_text'; case 'processing': return 'ui_processing'; case 'resetRectangle': return 'ui_reset_rectangle'; case 'insertOriginal': return 'ui_insert_original'; case 'vaultConnected': return 'ui_vault_connected'; case 'chooseVaultFirst': return 'ui_choose_vault_first'; case 'createFailed': return 'ui_create_failed'; case 'pickFile': return 'ui_pick_file'; case 'vaultUnreadable': return 'ui_vault_unreadable'; case 'savedToVault': return 'ui_saved_to_vault'; case 'saveError': return 'ui_save_error'; case 'photoFailed': return 'ui_photo_failed'; case 'correctedSaved': return 'ui_corrected_saved'; case 'photoSaved': return 'ui_photo_saved'; case 'correctionFailed': return 'ui_correction_failed';
+      default: return 'ui_saved';
+    }
+  }
+
+
   aboutToDisappear(): void {
     this.stopAutosavePolling();
     this.flushAutosave();
@@ -74,7 +98,7 @@ struct Index {
 
   private configureVaultServices(context: common.UIAbilityContext): void {
     if (!this.repository || !this.repository.hasVault()) {
-      this.vaultLabel = '尚未选择 Vault';
+      this.vaultLabel = this.t('noVault');
       this.attachmentService = undefined;
       return;
     }
@@ -116,7 +140,7 @@ struct Index {
           maxSelectNumber: 1
         });
       } catch (folderError) {
-        promptAction.showToast({ message: '手机端请选择 Vault 内任意 Markdown 文件' });
+        promptAction.showToast({ message: this.t('pickFile') });
         result = await documentPicker.select({
           fileSuffixFilters: ['Markdown|md,markdown'],
           maxSelectNumber: 1
@@ -131,9 +155,9 @@ struct Index {
       this.repository.setVault(result[0]);
       this.configureVaultServices(context);
       this.refreshNotes();
-      promptAction.showToast({ message: 'Vault 已连接' });
+      promptAction.showToast({ message: this.t('vaultConnected') });
     } catch (error) {
-      promptAction.showToast({ message: '无法打开这个 Vault，请选择可读写目录' });
+      promptAction.showToast({ message: this.t('vaultUnreadable') });
     } finally {
       this.isPickingVault = false;
     }
@@ -145,20 +169,20 @@ struct Index {
     this.selectedNote = note;
     this.title = note.title;
     this.isDirty = false;
-    this.saveStatus = '已保存';
+    this.saveStatus = 'saved';
     this.mode = ScreenMode.EDITOR;
     this.isLoadingEditor = true;
   }
 
   private createNote(): void {
     if (!this.repository || !this.repository.hasVault()) {
-      promptAction.showToast({ message: '请先选择 Obsidian Vault' });
+      promptAction.showToast({ message: this.t('chooseVaultFirst') });
       return;
     }
     try {
       this.openNote(this.repository.create());
     } catch (error) {
-      promptAction.showToast({ message: '无法创建每日笔记' });
+      promptAction.showToast({ message: this.t('createFailed') });
     }
   }
 
@@ -200,10 +224,10 @@ struct Index {
     this.lastSavedContent = content;
     this.lastSavedTitle = this.title;
     this.isDirty = false;
-    this.saveStatus = '已保存';
+    this.saveStatus = 'saved';
     this.refreshNotes();
     if (showConfirmation) {
-      promptAction.showToast({ message: '已保存到 Vault' });
+      promptAction.showToast({ message: this.t('savedToVault') });
     }
   }
 
@@ -212,8 +236,8 @@ struct Index {
       this.saveNote(showConfirmation);
       return true;
     } catch (error) {
-      this.saveStatus = '保存失败';
-      promptAction.showToast({ message: '保存失败，请检查 Vault 权限和存储空间' });
+      this.saveStatus = 'saveFailed';
+      promptAction.showToast({ message: this.t('saveError') });
       return false;
     }
   }
@@ -223,7 +247,7 @@ struct Index {
       return;
     }
     this.isDirty = true;
-    this.saveStatus = '未保存';
+    this.saveStatus = 'unsaved';
     this.cancelAutosave();
     this.autosaveTimer = setTimeout(() => {
       this.autosaveTimer = -1;
@@ -235,11 +259,11 @@ struct Index {
     if (!this.isDirty || this.mode !== ScreenMode.EDITOR) {
       return;
     }
-    this.saveStatus = '正在保存';
+    this.saveStatus = 'saving';
     try {
       this.saveNote(false);
     } catch (error) {
-      this.saveStatus = '保存失败';
+      this.saveStatus = 'saveFailed';
     }
   }
 
@@ -294,7 +318,7 @@ struct Index {
       if (attachment) {
         this.attachmentService.rollback(attachment);
       }
-      promptAction.showToast({ message: '拍照未完成，请重试' });
+      promptAction.showToast({ message: this.t('photoFailed') });
     } finally {
       this.isCapturing = false;
     }
@@ -337,7 +361,7 @@ struct Index {
     } catch (error) {
       this.attachmentService.rollback(this.pendingAttachment);
       this.photoEditorVisible = false;
-      promptAction.showToast({ message: '图片校正失败，请重新拍摄' });
+      promptAction.showToast({ message: this.t('correctionFailed') });
     }
   }
 
@@ -357,7 +381,7 @@ struct Index {
       this.attachmentService.confirm(this.pendingAttachment);
       this.pendingAttachment = new AttachmentResult('', '', '', '', '');
       this.photoEditorVisible = false;
-      promptAction.showToast({ message: corrected ? '原图与校正图已保存' : '照片已插入并保存' });
+      promptAction.showToast({ message: corrected ? this.t('correctedSaved') : this.t('photoSaved') });
     } catch (error) {
       if (corrected) {
         this.attachmentService.rollback(attachment);
@@ -398,14 +422,14 @@ struct Index {
             .fontSize(28)
             .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.ink'))
-          Text('本地 Obsidian Vault')
+          Text(this.t('localVault'))
             .fontSize(13)
             .fontColor($r('app.color.muted'))
             .margin({ top: 2 })
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
-        Button(this.isPickingVault ? '打开中' : '选择 Vault')
+        Button(this.isPickingVault ? this.t('opening') : this.t('chooseVault'))
           .fontSize(14)
           .fontColor($r('app.color.ink'))
           .backgroundColor($r('app.color.surface'))
@@ -425,7 +449,8 @@ struct Index {
         .width('100%')
         .padding({ left: 20, right: 20, bottom: 12 })
 
-      Search({ value: this.searchQuery, placeholder: '搜索标题或正文' })
+
+      Search({ value: this.searchQuery, placeholder: this.t('search') })
         .height(42)
         .margin({ left: 16, right: 16, bottom: 12 })
         .backgroundColor($r('app.color.surface'))
@@ -433,15 +458,15 @@ struct Index {
 
       if (!this.repository || !this.repository.hasVault()) {
         Column({ space: 12 }) {
-          Text('先连接一个 Obsidian Vault')
+          Text(this.t('connectVault'))
             .fontSize(20)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.ink'))
-          Text('笔记会直接保存为 Markdown 文件，电脑端可用 Obsidian 编辑。')
+          Text(this.t('vaultHelp'))
             .fontSize(14)
             .fontColor($r('app.color.muted'))
             .textAlign(TextAlign.Center)
-          Button('选择 Vault')
+          Button(this.t('chooseVault'))
             .fontColor(Color.White)
             .backgroundColor($r('app.color.brand'))
             .borderRadius(6)
@@ -452,14 +477,14 @@ struct Index {
         .justifyContent(FlexAlign.Center)
       } else if (this.notes.length === 0) {
         Column({ space: 12 }) {
-          Text('还没有笔记')
+          Text(this.t('noNotes'))
             .fontSize(20)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.ink'))
-          Text('创建今天的笔记，拍下眼前的内容。')
+          Text(this.t('createTodayHelp'))
             .fontSize(14)
             .fontColor($r('app.color.muted'))
-          Button('创建每日笔记')
+          Button(this.t('createDaily'))
             .fontColor(Color.White)
             .backgroundColor($r('app.color.brand'))
             .borderRadius(6)
@@ -470,11 +495,11 @@ struct Index {
         .justifyContent(FlexAlign.Center)
       } else if (this.visibleNotes.length === 0) {
         Column({ space: 8 }) {
-          Text('没有匹配的笔记')
+          Text(this.t('noResults'))
             .fontSize(18)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.ink'))
-          Text('换一个标题或正文关键词')
+          Text(this.t('searchHelp'))
             .fontSize(13)
             .fontColor($r('app.color.muted'))
         }
@@ -523,7 +548,7 @@ struct Index {
       }
 
       if (this.repository && this.repository.hasVault()) {
-        Button('新建每日笔记')
+        Button(this.t('newDaily'))
           .fontSize(15)
           .fontColor(Color.White)
           .backgroundColor($r('app.color.brand'))
@@ -541,7 +566,7 @@ struct Index {
   private editorPage(): void {
     Column() {
       Row({ space: 8 }) {
-        Button('返回')
+        Button(this.t('back'))
           .fontSize(14)
           .fontColor($r('app.color.ink'))
           .backgroundColor(Color.Transparent)
@@ -551,7 +576,7 @@ struct Index {
               this.mode = ScreenMode.LIST;
             }
           })
-        TextInput({ text: this.title, placeholder: '每日笔记标题' })
+        TextInput({ text: this.title, placeholder: this.t('titleHint') })
           .fontSize(19)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.ink'))
@@ -562,7 +587,7 @@ struct Index {
             this.title = value;
             this.scheduleAutosave();
           })
-        Button('保存')
+        Button(this.t('save'))
           .fontSize(14)
           .fontColor(Color.White)
           .backgroundColor($r('app.color.brand'))
@@ -581,11 +606,11 @@ struct Index {
         .onReady(() => this.loadEditor())
 
       Row() {
-        Text(`富文本 · ${this.saveStatus}`)
+        Text(`${this.t('richText')} · ${this.t(this.saveStatus)}`)
           .fontSize(12)
           .fontColor($r('app.color.muted'))
           .layoutWeight(1)
-        Button(this.isCapturing ? '处理中' : '拍照插入')
+        Button(this.isCapturing ? this.t('processing') : this.t('takePhoto'))
           .fontSize(15)
           .fontColor(Color.White)
           .backgroundColor($r('app.color.accent'))
@@ -606,7 +631,7 @@ struct Index {
   @Builder
   private photoEditor(): void {
     Column() {
-      Text('调整照片')
+      Text(this.t('adjustPhoto'))
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
         .fontColor(Color.White)
@@ -638,22 +663,22 @@ struct Index {
         this.photoPreviewHeight = Number(newValue.height);
       })
       Row({ space: 8 }) {
-        Button('恢复矩形')
+        Button(this.t('resetRectangle'))
           .layoutWeight(1)
           .onClick(() => this.photoPoints = Index.defaultPhotoPoints())
-        Button('直接插入原图')
+        Button(this.t('insertOriginal'))
           .layoutWeight(1)
           .onClick(() => this.insertOriginalPhoto())
       }
       .width('100%')
       .margin({ top: 14 })
       Row({ space: 8 }) {
-        Button('取消')
+        Button(this.t('cancel'))
           .layoutWeight(1)
           .backgroundColor($r('app.color.surface'))
           .fontColor($r('app.color.ink'))
           .onClick(() => this.cancelPhotoEdit())
-        Button('裁剪并校正')
+        Button(this.t('cropCorrect'))
           .layoutWeight(1)
           .backgroundColor($r('app.color.accent'))
           .fontColor(Color.White)
