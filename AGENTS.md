@@ -7,6 +7,18 @@ model for core tasks. It owns scope, integration, validation, and the final
 report; delegating work never transfers that accountability. Do not use Terra as
 a default or required model.
 
+Apply an environment gate before selecting a model:
+
+- **Codex:** use GPT-family models only, following the Sol, Astra, and Luna
+  routing below. Do not select or delegate work to Gemini from Codex, even when
+  a Gemini integration is available.
+- **Google ecosystem IDE:** Gemini 3.8 Flash may be considered as an optional
+  executor for eligible bounded tasks. Its availability does not make it the
+  default coordinator or reviewer.
+- **Unknown or ambiguous environment:** follow the Codex GPT-only route until
+  the host environment is confirmed. Do not infer the environment from the
+  repository path, editor files, or installed integrations alone.
+
 Select the model and reasoning level deliberately:
 
 - **Sol, `medium`:** the default for core tasks, including ordinary
@@ -17,6 +29,12 @@ Select the model and reasoning level deliberately:
 - **Luna, `max`:** questions, read-only checks, small documentation edits,
   inventories, formatting, boilerplate, test-data preparation, and other simple
   or bounded mechanical work. `max` is Luna's highest available reasoning level.
+- **Gemini 3.8 Flash, only in a Google ecosystem IDE:** an optional executor for
+  clearly scoped, low-risk implementation or mechanical tasks with named files,
+  fixed acceptance criteria, and exact validation commands. It does not own
+  architecture, scope, integration, high-risk review, or the final report. If
+  it is unavailable or the environment is Codex or unknown, use Luna at `max`
+  for simple work or Sol at `medium` for core implementation.
 
 Before starting an implementation task, classify its risk and explicitly state
 one execution mode in the first progress update; file count alone is not a risk
@@ -26,6 +44,12 @@ signal.
   L0 work. Sol at `medium` performs L1 discovery, implementation, affected
   tests, and the final report. Do not create sub-agents or request a separate
   review unless the user asks for one or the task is reclassified.
+- **Google IDE Gemini-assisted mode (L1 or L2 only):** In a confirmed Google
+  ecosystem IDE, Gemini 3.8 Flash may execute one or more independent bounded
+  tasks. State the coordinator, executor, and file ownership before handoff. The
+  coordinating agent inspects the resulting diff, reruns affected checks,
+  integrates the work, and owns the final report. This mode is forbidden in
+  Codex and when the environment is unknown.
 - **Multi-agent mode (L2 or L3, or explicitly requested):** State the level,
   each role, file ownership, and the planned handoffs before creating
   sub-agents. Use the workflow in the table below. Sub-agents may work in
@@ -34,8 +58,8 @@ signal.
 | Level | Scope | Required workflow |
 | --- | --- | --- |
 | L0 | Questions, read-only work, typo fixes, isolated documentation | Simple mode: Luna at `max` only; no sub-agent. |
-| L1 | Local UI or pure-logic change without persistence, permissions, or contract effects | Simple mode: Sol at `medium` implements and runs focused tests. |
-| L2 | Multi-screen or substantial user-visible feature without Vault/sync/concurrency risk | Multi-agent mode: Sol at `high` or Astra at `medium` provides a short read-only design review; Sol at `medium` implements and validates; the original reviewer performs final review. |
+| L1 | Local UI or pure-logic change without persistence, permissions, or contract effects | Simple mode: Sol at `medium` implements and runs focused tests. In a confirmed Google ecosystem IDE only, Gemini 3.8 Flash may execute a bounded portion, with the coordinator reviewing and validating it. |
+| L2 | Multi-screen or substantial user-visible feature without Vault/sync/concurrency risk | Multi-agent mode: Sol at `high` or Astra at `medium` provides a short read-only design review; Sol at `medium` implements and validates. In a confirmed Google ecosystem IDE only, the coordinator may assign independent bounded execution units to Gemini 3.8 Flash; the original reviewer performs final review. |
 | L3 | Vault data, deletes, permissions, sync, concurrency, migrations, cross-client contracts, or security | Multi-agent mode: Sol at `high` or Astra at `medium` reviewer → Sol at `medium` developer → independent Sol at `medium` tester → original reviewer. |
 
 For L2 and L3, the developer updates design, contract, spec, plan, and task
@@ -50,6 +74,13 @@ acceptance commands. Do not pass full conversation history when that card and
 the named files are sufficient. Do not let agents edit the same files
 concurrently; preserve user changes, give each editing phase explicit file
 ownership, and keep task records singular.
+
+For Gemini 3.8 Flash handoffs in a confirmed Google ecosystem IDE, keep each task
+independently verifiable and avoid Vault data, deletes, permissions, sync,
+concurrency, migrations, cross-client contracts, security decisions, secret
+handling, and destructive actions. Treat its output as an untrusted working-tree
+proposal until the coordinating agent has inspected the diff and reproduced the
+required checks.
 
 The developer runs fast, affected checks during implementation. The independent
 tester runs the final full suite once per accepted implementation revision; do
