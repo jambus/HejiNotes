@@ -132,7 +132,7 @@ class BackgroundSyncService : Service() {
             this,
             0,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         ))
         .setOngoing(ongoing)
         .setAutoCancel(!ongoing)

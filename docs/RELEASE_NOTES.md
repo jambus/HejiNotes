@@ -15,17 +15,22 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
   构建记录后，才能标记为“已发布”。
 - 尚未完成的优化不写入“已实现功能”，统一关联到对应编号规格的未完成任务。
 
-## 0.5.0 — 品牌与安装标识迁移
+## 0.5.1 — 品牌、语言与实现加固
 
-**状态**：开发中，待 Android 构建和真机重新授权验收（非候选）
+**状态**：开发中，待当前 Android 源码重新构建和真机重新授权验收（非候选）
 **Android 安装包版本**：`versionName = 0.5.1`，`versionCode = 10`
 
-### 0.5.1 开发基线（未发布、非候选）
+### 当前开发基线（未发布、非候选）
 
 - Android 提供中文、English 与跟随系统的应用呈现偏好；偏好不改写 Vault。
 - 同步状态保留语义代码、计数与最多五项安全参数，并按当前语言渲染详情。
+- Android 同步实现单流双摘要（MD5 + SHA-256）与基线摘要复用初步架构，减少大文件重复读取（FR-322，待大文件真机压测）。
+- Android 照片校正完成手势排除移出 onDraw 与拖动刷新去重；引入不可变变换快照并转入后台媒体线程处理（FR-827、FR-828，待旋转与交互回归）。
+- Android 引入应用级串行协调器托管正文与媒体任务，解决配置重建与后台保存冲突风险（FR-807、FR-821、FR-822，待生命周期深度回归）。
+- 开展 Android 29–34 行为变化与 targetSdk 34 迁移审计，补齐 PendingIntent.FLAG_IMMUTABLE，并在清单就绪前台服务与通知权限（FR-531，当前维持 targetSdk 28，待分阶段升级）。
 - HAP 在 SDK 10 基线跟随系统语言；不提供应用内语言覆盖，等待兼容实现与真机验证。
 - 本条目不代表候选或发布；独立测试和设备验收尚未完成。
+
 **HAP 安装包版本**：`versionName = 1.0.1`，`versionCode = 1000001`
 
 ### 当前范围
@@ -41,7 +46,9 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
 ### 当前验证
 
 - HAP 已通过 `./scripts/build-hap.sh` 构建；现有 ArkTS 异常处理与弃用 API 警告不由本次改名引入。
-- Android 已使用 DevEco JBR 与 `~/Library/Android/sdk` 运行单测和重新打包；`app-debug.apk` 已确认包含 `com.jambus.heji`、`0.5.0` 与 `versionCode 9`。Android Gradle Plugin 对 `compileSdk 34` 发出兼容性警告，但构建与测试通过。
+- Android 上一个已记录验证的 `app-debug.apk` 包含 `com.jambus.heji`、`0.5.0` 与
+  `versionCode 9`；当前源码配置已提升为 `0.5.1`、`versionCode 10`，仍须使用 DevEco JBR
+  与 Android SDK 完成 fresh 单测和重新打包后，才能记录为本版本构建结果。
 - 待执行 Mate 60 上的新安装、Vault 重新选择、云端重新授权和既有 Vault 互操作验证。
 
 ## 0.4.0 — 原 Markbook 当前开发版本

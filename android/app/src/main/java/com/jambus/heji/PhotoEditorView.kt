@@ -48,6 +48,17 @@ class PhotoEditorView(context: android.content.Context, private val bitmap: Bitm
     private var activeHandle = -1
     private var selectionVisible = true
 
+    private var lastAppliedExclusionRects: List<ExclusionRect> = emptyList()
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        val scale = min(w.toFloat() / bitmap.width, h.toFloat() / bitmap.height)
+        val left = (w - bitmap.width * scale) / 2f
+        val top = (h - bitmap.height * scale) / 2f
+        imageRect.set(left, top, left + bitmap.width * scale, top + bitmap.height * scale)
+        updateGestureExclusion()
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.drawColor(Color.BLACK)
@@ -56,7 +67,6 @@ class PhotoEditorView(context: android.content.Context, private val bitmap: Bitm
         val top = (height - bitmap.height * scale) / 2f
         imageRect.set(left, top, left + bitmap.width * scale, top + bitmap.height * scale)
         canvas.drawBitmap(bitmap, null, imageRect, imagePaint)
-        updateGestureExclusion()
 
         if (selectionVisible) {
             val path = selectionPath()
@@ -82,58 +92,28 @@ class PhotoEditorView(context: android.content.Context, private val bitmap: Bitm
             }
             MotionEvent.ACTION_MOVE -> if (activeHandle >= 0) {
                 updateHandle(activeHandle, imageX(event.x), imageY(event.y))
+                updateGestureExclusion()
                 invalidate()
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 activeHandle = -1
+                updateGestureExclusion()
                 return true
             }
         }
         return true
     }
 
+    fun freezeTransformRequest(): PhotoTransformRequest = PhotoTransformRequest(
+        mode = mode,
+        sourceWidth = bitmap.width,
+        sourceHeight = bitmap.height,
+        handles = handles.map { PhotoTransformPoint(it.x, it.y) }
+    )
+
     fun outputJpeg(quality: Int = 92): ByteArray {
-        val output = if (mode == PhotoEditMode.RECTANGLE) cropBitmap() else perspectiveBitmap()
-        return java.io.ByteArrayOutputStream().use { stream ->
-            output.compress(Bitmap.CompressFormat.JPEG, quality, stream)
-            if (output !== bitmap) output.recycle()
-            stream.toByteArray()
-        }
-    }
-
-    private fun cropBitmap(): Bitmap {
-        val left = handles.minOf { it.x }.roundToInt().coerceIn(0, bitmap.width - 1)
-        val top = handles.minOf { it.y }.roundToInt().coerceIn(0, bitmap.height - 1)
-        val right = handles.maxOf { it.x }.roundToInt().coerceIn(left + 1, bitmap.width)
-        val bottom = handles.maxOf { it.y }.roundToInt().coerceIn(top + 1, bitmap.height)
-        return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
-    }
-
-    private fun perspectiveBitmap(): Bitmap {
-        val topWidth = distance(handles[0], handles[1])
-        val bottomWidth = distance(handles[3], handles[2])
-        val leftHeight = distance(handles[0], handles[3])
-        val rightHeight = distance(handles[1], handles[2])
-        val outWidth = max(1, ((topWidth + bottomWidth) / 2f).roundToInt())
-        val outHeight = max(1, ((leftHeight + rightHeight) / 2f).roundToInt())
-        val result = Bitmap.createBitmap(outWidth, outHeight, Bitmap.Config.ARGB_8888)
-        val matrix = Matrix()
-        val source = floatArrayOf(
-            handles[0].x, handles[0].y,
-            handles[1].x, handles[1].y,
-            handles[2].x, handles[2].y,
-            handles[3].x, handles[3].y
-        )
-        val destination = floatArrayOf(
-            0f, 0f,
-            outWidth.toFloat(), 0f,
-            outWidth.toFloat(), outHeight.toFloat(),
-            0f, outHeight.toFloat()
-        )
-        matrix.setPolyToPoly(source, 0, destination, 0, 4)
-        Canvas(result).drawBitmap(bitmap, matrix, imagePaint)
-        return result
+        return PhotoTransformer.transform(bitmap, freezeTransformRequest(), quality)
     }
 
     private fun updateHandle(index: Int, x: Float, y: Float) {
@@ -172,21 +152,21 @@ class PhotoEditorView(context: android.content.Context, private val bitmap: Bitm
 
     private fun updateGestureExclusion() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
-        if (mode != PhotoEditMode.PERSPECTIVE) {
-            systemGestureExclusionRects = emptyList()
-            return
-        }
-        val radius = (GESTURE_EXCLUSION_RADIUS_DP * resources.displayMetrics.density).roundToInt()
-        val topLeft = viewY(handles[0].y).roundToInt()
-        val bottomLeft = viewY(handles[3].y).roundToInt()
-        val topRight = viewY(handles[1].y).roundToInt()
-        val bottomRight = viewY(handles[2].y).roundToInt()
-        systemGestureExclusionRects = listOf(
-            Rect(0, topLeft - radius, viewX(handles[0].x).roundToInt() + radius, topLeft + radius),
-            Rect(0, bottomLeft - radius, viewX(handles[3].x).roundToInt() + radius, bottomLeft + radius),
-            Rect(viewX(handles[1].x).roundToInt() - radius, topRight - radius, width, topRight + radius),
-            Rect(viewX(handles[2].x).roundToInt() - radius, bottomRight - radius, width, bottomRight + radius)
+        val newRects = PhotoGestureExclusionPolicy.computeExclusionRects(
+            mode = mode,
+            handles = handles.map { viewX(it.x) - imageRect.left to viewY(it.y) - imageRect.top },
+            imageLeft = imageRect.left,
+            imageTop = imageRect.top,
+            imageWidth = imageRect.width(),
+            imageHeight = imageRect.height(),
+            density = resources.displayMetrics.density,
+            viewWidth = width,
+            viewHeight = height
         )
+        if (newRects != lastAppliedExclusionRects) {
+            lastAppliedExclusionRects = newRects
+            systemGestureExclusionRects = newRects.map { it.toAndroidRect() }
+        }
     }
 
     private fun nearestHandle(x: Float, y: Float): Int {

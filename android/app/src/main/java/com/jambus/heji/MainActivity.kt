@@ -51,7 +51,7 @@ class MainActivity : Activity() {
     private lateinit var drivePreferences: DriveSyncPreferences
     private lateinit var driveAuth: GoogleDriveAuth
     private val driveExecutor = Executors.newSingleThreadExecutor()
-    private val noteIoExecutor = Executors.newSingleThreadExecutor()
+    private val noteIoExecutor = AppNoteSaveCoordinator
     private val structuralIoExecutor = Executors.newSingleThreadExecutor()
     private var webView: WebView? = null
     private var statusView: TextView? = null
@@ -64,6 +64,7 @@ class MainActivity : Activity() {
     private val saveCoordinator = RevisionSaveCoordinator()
     private val saveWaiters = mutableListOf<(Boolean) -> Unit>()
     private var editorGeneration = 0L
+    private val editorReleaseCoordinator = EditorReleaseCoordinator<WebView>()
     private var currentNote: VaultDocument? = null
     private var browserDirectory: VaultDocument? = null
     private var currentVaultName = "Vault"
@@ -149,9 +150,11 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         handler.removeCallbacks(autosave)
         driveExecutor.shutdownNow()
-        noteIoExecutor.shutdownNow()
         // Never interrupt an already-confirmed structural mutation; its repository lease cleans up in finally.
         structuralIoExecutor.shutdown()
+        if (screen == Screen.EDITOR && webView != null && (saveCoordinator.hasUnsavedChanges || saveCoordinator.hasInFlightSave)) {
+            saveCurrentNote()
+        }
         releaseEditor()
         super.onDestroy()
     }
@@ -170,8 +173,12 @@ class MainActivity : Activity() {
         handler.removeCallbacks(autosave)
         if (editor == null) return
         (editor.parent as? android.view.ViewGroup)?.removeView(editor)
-        editor.stopLoading()
-        editor.destroy()
+        editorReleaseCoordinator.release(editor) { target ->
+            try {
+                target.stopLoading()
+                target.destroy()
+            } catch (_: Exception) {}
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -2187,32 +2194,37 @@ class MainActivity : Activity() {
         }
         val generation = editorGeneration
         updateSaveStatus()
+        editorReleaseCoordinator.onSerializationStarted(editor)
         editor.evaluateJavascript("window.markbook && window.markbook.serialize ? window.markbook.serialize() : ''") { value ->
-            if (generation != editorGeneration || screen != Screen.EDITOR || noteIoExecutor.isShutdown) {
-                return@evaluateJavascript
-            }
-            val content = decodeJavascriptString(value)
-            noteIoExecutor.execute {
-                val success = repository.saveText(note, content)
-                val refreshed = if (success) repository.refreshDocument(note) else null
-                runOnUiThread {
-                    if (isFinishing || isDestroyed || generation != editorGeneration || screen != Screen.EDITOR) {
-                        return@runOnUiThread
+            try {
+                if (value != null) {
+                    val content = decodeJavascriptString(value)
+                    AppNoteSaveCoordinator.submitSave(repository, note, content, request.revision) { success, refreshed ->
+                        if (isFinishing || isDestroyed || generation != editorGeneration || screen != Screen.EDITOR) {
+                            return@submitSave
+                        }
+                        saveCoordinator.complete(request, success)
+                        if (success && refreshed != null) currentNote = refreshed
+                        updateSaveStatus()
+                        if (!success) {
+                            val pending = saveWaiters.toList()
+                            saveWaiters.clear()
+                            pending.forEach { it(false) }
+                        } else if (saveCoordinator.hasUnsavedChanges) {
+                            startNextSave()
+                        } else {
+                            val pending = saveWaiters.toList()
+                            saveWaiters.clear()
+                            pending.forEach { it(true) }
+                        }
                     }
-                    saveCoordinator.complete(request, success)
-                    if (success && refreshed != null) currentNote = refreshed
-                    updateSaveStatus()
-                    if (!success) {
-                        val pending = saveWaiters.toList()
-                        saveWaiters.clear()
-                        pending.forEach { it(false) }
-                    } else if (saveCoordinator.hasUnsavedChanges) {
-                        startNextSave()
-                    } else {
-                        val pending = saveWaiters.toList()
-                        saveWaiters.clear()
-                        pending.forEach { it(true) }
-                    }
+                }
+            } finally {
+                editorReleaseCoordinator.onSerializationCompleted(editor) { target ->
+                    try {
+                        target.stopLoading()
+                        target.destroy()
+                    } catch (_: Exception) {}
                 }
             }
         }
@@ -2669,56 +2681,70 @@ class MainActivity : Activity() {
         photoInsertAction?.isEnabled = false
         photoModeActions.forEach { it.isEnabled = false }
         photoStatusView?.text = "正在写入原图、校正图和笔记…"
-        val corrected = try {
-            view.outputJpeg()
-        } catch (_: Exception) {
-            showPhotoSaveFailure("无法处理照片，请调整后重试")
-            return
-        }
-        noteIoExecutor.execute {
-            val attachments = try {
-                FileInputStream(capture).use { repository.savePhotoPair(note, it, corrected) }
+        val transformRequest = view.freezeTransformRequest()
+        AppNoteSaveCoordinator.executeMedia {
+            val corrected = try {
+                PhotoTransformer.transform(bitmap, transformRequest)
             } catch (_: Exception) {
-                null
-            }
-            if (attachments == null) {
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
-                    showPhotoSaveFailure("照片尚未插入，请检查 Vault 权限或存储空间后重试")
+                    showPhotoSaveFailure("无法处理照片，请调整后重试")
                 }
-                return@execute
+                return@executeMedia
             }
-            val relativePath = repository.relativeAttachmentPath(note, attachments)
-            val imageLink = "![${attachments.corrected}]($relativePath)"
-            val content = insertPhotoAtCapturePoint(
-                photoContextContent ?: repository.readText(note).orEmpty(),
-                imageLink
-            )
-            val success = repository.saveText(note, content)
-            if (success) {
-                val refreshed = repository.refreshDocument(note) ?: note
-                repository.confirmPhotoPair(attachments)
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    currentNote = refreshed
-                    pendingEditorScrollY = photoContextScrollY
-                    pendingCaretImagePath = relativePath
-                    photoContextContent = null
-                    if (!bitmap.isRecycled) bitmap.recycle()
-                    discardCaptureFile()
-                    editorView = null
-                    photoStatusView = null
-                    photoInsertAction = null
-                    photoModeActions = emptyList()
-                    photoSavePending = false
-                    showEditor(refreshed, content)
-                    showEditorStatus("照片已插入并保存")
+            noteIoExecutor.execute {
+                val attachments = try {
+                    FileInputStream(capture).use { repository.savePhotoPair(note, it, corrected) }
+                } catch (_: Exception) {
+                    null
                 }
-            } else {
-                repository.rollbackPhotoPair(attachments)
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    showPhotoSaveFailure("无法更新笔记，照片尚未插入；可重试或返回笔记")
+                if (attachments == null) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        showPhotoSaveFailure("照片尚未插入，请检查 Vault 权限或存储空间后重试")
+                    }
+                    return@execute
+                }
+                val relativePath = repository.relativeAttachmentPath(note, attachments)
+                val imageLink = "![${attachments.corrected}]($relativePath)"
+                val content = insertPhotoAtCapturePoint(
+                    photoContextContent ?: repository.readText(note).orEmpty(),
+                    imageLink
+                )
+                val success = repository.saveText(note, content)
+                if (success) {
+                    val refreshed = repository.refreshDocument(note) ?: note
+                    repository.confirmPhotoPair(attachments)
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) {
+                            if (!bitmap.isRecycled) bitmap.recycle()
+                            discardCaptureFile()
+                            return@runOnUiThread
+                        }
+                        currentNote = refreshed
+                        pendingEditorScrollY = photoContextScrollY
+                        pendingCaretImagePath = relativePath
+                        photoContextContent = null
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                        discardCaptureFile()
+                        editorView = null
+                        photoStatusView = null
+                        photoInsertAction = null
+                        photoModeActions = emptyList()
+                        photoSavePending = false
+                        showEditor(refreshed, content)
+                        showEditorStatus("照片已插入并保存")
+                    }
+                } else {
+                    repository.rollbackPhotoPair(attachments)
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) {
+                            if (!bitmap.isRecycled) bitmap.recycle()
+                            discardCaptureFile()
+                            return@runOnUiThread
+                        }
+                        showPhotoSaveFailure("无法更新笔记，照片尚未插入；可重试或返回笔记")
+                    }
                 }
             }
         }

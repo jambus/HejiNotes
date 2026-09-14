@@ -87,7 +87,10 @@
 - [ ] T556 Android：作为独立兼容性迁移审计当前 AGP/JDK 支持范围与 Android 29–34 行为变化，
   分阶段提升 `targetSdk` 至 34，并将 Java/Kotlin 目标对齐到受支持版本；每阶段完成 SAF、
   FileProvider 相机、WebView、前台后台服务/通知、安装升级和 Mate 60 回归，更新 release notes、
-  `versionName`、单调递增 `versionCode` 并生成 fresh APK（FR-531）。
+  `versionName`、单调递增 `versionCode` 并生成 fresh APK（FR-531）。（进行中：已输出
+  `docs/specs/005-harmonyos4-android-apk/compatibility-audit.md` 审计报告，代码就绪 `FLAG_IMMUTABLE`，
+  清单就绪 `FOREGROUND_SERVICE_DATA_SYNC` 与 `POST_NOTIFICATIONS`；当前工程维持 `targetSdk 28`，待分阶段提升与真机回归）。
 
-本机已验证共享 Vault 契约检查与 `android/gradlew --offline --no-daemon assembleDebug` 成功，产物为
-`android/app/build/outputs/apk/debug/app-debug.apk`；Mate 60 真机安装与验收仍未完成。
+上一个 `0.5.0` / `versionCode 9` 基线已在本机通过共享 Vault 契约检查与 debug APK 构建。
+当前 `0.5.1` / `versionCode 10` 源码仍须运行 fresh Android 单测和打包；Mate 60 真机安装与
+验收仍未完成。

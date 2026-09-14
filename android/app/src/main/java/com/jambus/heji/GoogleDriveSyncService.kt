@@ -49,8 +49,14 @@ class GoogleDriveSyncService(
         val localFiles = try { repository.syncFilesStrict().associateBy { it.relativePath } } catch (_: Exception) {
             return DriveSyncResult(0, 0, 0, 0, listOf("无法完整读取本地 Vault，本次同步未修改远端"), false)
         }
-        val localMd5 = localFiles.mapValues { (_, file) -> md5(repository.openSyncInput(file)) ?: return DriveSyncResult(0, 0, 0, 0, listOf("无法读取本地同步文件"), false) }
-        val localSha256 = localFiles.mapValues { (_, file) -> sha256(repository.openSyncInput(file)) ?: return DriveSyncResult(0, 0, 0, 0, listOf("无法读取本地同步文件"), false) }
+        val localDigests = mutableMapOf<String, LocalFileDigests>()
+        for ((path, file) in localFiles) {
+            val digest = LocalFileDigestsCalculator.computeDigests(repository.openSyncInput(file))
+                ?: return DriveSyncResult(0, 0, 0, 0, listOf("无法读取本地同步文件"), false)
+            localDigests[path] = digest
+        }
+        val localMd5 = localDigests.mapValues { it.value.md5 }
+        val localSha256 = localDigests.mapValues { it.value.sha256 }
         val baseline = when (val loaded = baselineStore?.load(vaultId, root.id, accountId)) {
             null, DriveBaselineLoad.Missing -> emptyMap()
             is DriveBaselineLoad.Present -> loaded.baseline.files
@@ -115,6 +121,7 @@ class GoogleDriveSyncService(
                                 } else {
                                     val written = api.download(remote).use { input -> repository.writeSyncFile(path, remote.mimeType, input, localMd5[path]) }
                                     if (written) {
+                                        localDigests.remove(path)
                                         downloaded++
                                     } else {
                                         val conflict = conflictPath(path, "Google Drive", conflictStamp())
@@ -190,7 +197,7 @@ class GoogleDriveSyncService(
         }
         val outcome = result(uploaded, downloaded, unchanged, conflicts, errors, false)
         if (outcome.isSuccessful && baselineStore != null) {
-            val baselineSaved = runCatching { saveBaseline(root) }.getOrDefault(false)
+            val baselineSaved = runCatching { saveBaseline(root, localDigests) }.getOrDefault(false)
             if (!baselineSaved) return DriveSyncResult(uploaded, downloaded, unchanged, conflicts, listOf("无法保存同步基线"), false)
             completedChangeIds.forEach { id ->
                 if (changeStore?.acknowledge(id) != true) return DriveSyncResult(uploaded, downloaded, unchanged, conflicts, listOf("无法确认本地搬运历史"), false)
@@ -199,7 +206,7 @@ class GoogleDriveSyncService(
         return outcome
     }
 
-    private fun saveBaseline(root: DriveVaultRoot): Boolean {
+    private fun saveBaseline(root: DriveVaultRoot, localDigests: Map<String, LocalFileDigests>): Boolean {
         val local = repository.syncFilesStrict().associateBy { it.relativePath }
         val remoteFiles = linkedMapOf<String, DriveItem>()
         val folders = linkedMapOf("" to root.id)
@@ -207,7 +214,9 @@ class GoogleDriveSyncService(
         val files = buildMap {
             local.forEach { (path, file) ->
                 val remote = remoteFiles[path] ?: return@forEach
-                val sha = sha256(repository.openSyncInput(file)) ?: return@forEach
+                val sha = localDigests[path]?.sha256
+                    ?: LocalFileDigestsCalculator.computeDigests(repository.openSyncInput(file))?.sha256
+                    ?: return@forEach
                 put(path, DriveBaselineFile(path, sha, remote.id, remote.md5 ?: md5(api.download(remote)), remote.version))
             }
         }
