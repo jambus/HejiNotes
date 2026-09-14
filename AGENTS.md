@@ -2,31 +2,30 @@
 
 ## Agent Routing, Review, and Git Control
 
-Use **Terra with high reasoning effort** as the primary coordinator. It owns
-scope, integration, validation, and the final report; delegating work never
-transfers that accountability.
+Use **Sol with medium reasoning effort** as the primary coordinator and default
+model for core tasks. It owns scope, integration, validation, and the final
+report; delegating work never transfers that accountability. Do not use Terra as
+a default or required model.
 
 Select the model and reasoning level deliberately:
 
-- **Terra, `medium`:** questions, read-only checks, small documentation edits,
-  and simple inventories.
-- **Terra, `high`:** the default for implementation, focused tests, and ordinary
-  UI or logic work.
-- **Terra or Sol, `xhigh`:** only when a hard bug, migration, or measured task
-  complexity benefits from the added reasoning.
-- **Luna, `low` or `medium`:** bounded mechanical work—discovery, formatting,
-  inventories, boilerplate, or test-data preparation. Terra verifies results.
-- **Sol, `high`:** architecture, unresolved lifecycle or persistence bugs,
-  security, Vault-contract changes, compatibility, and final high-risk review.
+- **Sol, `medium`:** the default for core tasks, including ordinary
+  implementation, focused tests, coordination, validation, and final reporting.
+- **Sol, `high` or Astra, `medium`:** architecture, hard bugs, migrations,
+  unresolved lifecycle or persistence issues, security, Vault-contract changes,
+  compatibility, and other measured high-complexity work.
+- **Luna, `max`:** questions, read-only checks, small documentation edits,
+  inventories, formatting, boilerplate, test-data preparation, and other simple
+  or bounded mechanical work. `max` is Luna's highest available reasoning level.
 
 Before starting an implementation task, classify its risk and explicitly state
 one execution mode in the first progress update; file count alone is not a risk
 signal.
 
-- **Simple mode (default; L0 or L1):** Use one Terra agent only. For L1, Terra
-  at `high` performs discovery, implementation, affected tests, and the final
-  report. Do not create sub-agents or request a separate review unless the user
-  asks for one or the task is reclassified.
+- **Simple mode (default; L0 or L1):** Use one agent only. Luna at `max` handles
+  L0 work. Sol at `medium` performs L1 discovery, implementation, affected
+  tests, and the final report. Do not create sub-agents or request a separate
+  review unless the user asks for one or the task is reclassified.
 - **Multi-agent mode (L2 or L3, or explicitly requested):** State the level,
   each role, file ownership, and the planned handoffs before creating
   sub-agents. Use the workflow in the table below. Sub-agents may work in
@@ -34,14 +33,14 @@ signal.
 
 | Level | Scope | Required workflow |
 | --- | --- | --- |
-| L0 | Questions, read-only work, typo fixes, isolated documentation | Simple mode: Terra only; no sub-agent. |
-| L1 | Local UI or pure-logic change without persistence, permissions, or contract effects | Simple mode: Terra implements and runs focused tests. |
-| L2 | Multi-screen or substantial user-visible feature without Vault/sync/concurrency risk | Multi-agent mode: Sol provides a short read-only design review; Terra implements and validates; the same Sol agent performs final review. |
-| L3 | Vault data, deletes, permissions, sync, concurrency, migrations, cross-client contracts, or security | Multi-agent mode: Sol → Terra developer → independent Terra tester → original Sol reviewer. |
+| L0 | Questions, read-only work, typo fixes, isolated documentation | Simple mode: Luna at `max` only; no sub-agent. |
+| L1 | Local UI or pure-logic change without persistence, permissions, or contract effects | Simple mode: Sol at `medium` implements and runs focused tests. |
+| L2 | Multi-screen or substantial user-visible feature without Vault/sync/concurrency risk | Multi-agent mode: Sol at `high` or Astra at `medium` provides a short read-only design review; Sol at `medium` implements and validates; the original reviewer performs final review. |
+| L3 | Vault data, deletes, permissions, sync, concurrency, migrations, cross-client contracts, or security | Multi-agent mode: Sol at `high` or Astra at `medium` reviewer → Sol at `medium` developer → independent Sol at `medium` tester → original reviewer. |
 
 For L2 and L3, the developer updates design, contract, spec, plan, and task
-documents before implementation when the change affects them. Sol findings must
-cite concrete files and acceptance criteria. The independent L3 tester does not
+documents before implementation when the change affects them. Reviewer findings
+must cite concrete files and acceptance criteria. The independent L3 tester does not
 modify production code, distinguishes automated from real-device evidence, and
 reruns affected checks after repairs.
 
