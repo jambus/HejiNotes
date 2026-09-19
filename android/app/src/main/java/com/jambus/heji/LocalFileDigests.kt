@@ -28,3 +28,33 @@ object LocalFileDigestsCalculator {
         }
     }
 }
+
+object DriveSyncDigestPolicy {
+    fun canReuseBaselineDigest(
+        cached: DriveBaselineFile?,
+        localLastModified: Long?,
+        localSize: Long? = null
+    ): Boolean = false
+
+    fun canReuseBaselineDigest(
+        path: String?,
+        cached: DriveBaselineFile?,
+        localLastModified: Long?,
+        localSize: Long? = null
+    ): Boolean = false
+
+    fun resolveDigest(
+        cached: DriveBaselineFile?,
+        localLastModified: Long?,
+        localSize: Long? = null,
+        computeFallback: () -> LocalFileDigests?
+    ): LocalFileDigests? = computeFallback()
+
+    fun resolveDigest(
+        path: String?,
+        cached: DriveBaselineFile?,
+        localLastModified: Long?,
+        localSize: Long? = null,
+        computeFallback: () -> LocalFileDigests?
+    ): LocalFileDigests? = computeFallback()
+}

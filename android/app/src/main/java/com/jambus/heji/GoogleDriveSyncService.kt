@@ -20,10 +20,12 @@ data class DriveSyncResult(
     val isSuccessful: Boolean get() = errors.isEmpty() && !cancelled
 }
 
-/**
- * First Android sync slice. It compares the complete user-owned Vault each time and never
- * propagates deletions. A divergent path keeps both files instead of choosing a silent winner.
- */
+private data class LocalFileSnapshot(
+    val digests: LocalFileDigests,
+    val lastModified: Long?,
+    val size: Long?
+)
+
 class GoogleDriveSyncService(
     private val repository: VaultRepository,
     private val api: DriveGateway,
@@ -46,22 +48,24 @@ class GoogleDriveSyncService(
         }
         if (cancelled.get()) return DriveSyncResult(0, 0, 0, 0, emptyList(), true)
 
-        val localFiles = try { repository.syncFilesStrict().associateBy { it.relativePath } } catch (_: Exception) {
-            return DriveSyncResult(0, 0, 0, 0, listOf("无法完整读取本地 Vault，本次同步未修改远端"), false)
-        }
-        val localDigests = mutableMapOf<String, LocalFileDigests>()
-        for ((path, file) in localFiles) {
-            val digest = LocalFileDigestsCalculator.computeDigests(repository.openSyncInput(file))
-                ?: return DriveSyncResult(0, 0, 0, 0, listOf("无法读取本地同步文件"), false)
-            localDigests[path] = digest
-        }
-        val localMd5 = localDigests.mapValues { it.value.md5 }
-        val localSha256 = localDigests.mapValues { it.value.sha256 }
         val baseline = when (val loaded = baselineStore?.load(vaultId, root.id, accountId)) {
             null, DriveBaselineLoad.Missing -> emptyMap()
             is DriveBaselineLoad.Present -> loaded.baseline.files
             DriveBaselineLoad.Corrupt -> return DriveSyncResult(0, 0, 0, 0, listOf("同步基线损坏，本次同步未修改远端"), false)
         }
+
+        val localFiles = try { repository.syncFilesStrict().associateBy { it.relativePath } } catch (_: Exception) {
+            return DriveSyncResult(0, 0, 0, 0, listOf("无法完整读取本地 Vault，本次同步未修改远端"), false)
+        }
+        val localSnapshots = mutableMapOf<String, LocalFileSnapshot>()
+        for ((path, file) in localFiles) {
+            val digest = LocalFileDigestsCalculator.computeDigests(repository.openSyncInput(file))
+                ?: return DriveSyncResult(0, 0, 0, 0, listOf("无法读取本地同步文件"), false)
+            localSnapshots[path] = LocalFileSnapshot(digest, file.document.lastModified, file.document.size)
+        }
+        val localDigests = localSnapshots.mapValues { it.value.digests }.toMutableMap()
+        val localMd5 = localDigests.mapValues { it.value.md5 }
+        val localSha256 = localDigests.mapValues { it.value.sha256 }
         val moveChanges = when (val loaded = changeStore?.changes(vaultId)) {
             null -> if (changeStore == null) emptyList() else return DriveSyncResult(0, 0, 0, 0, listOf("本地变化历史损坏，本次同步未修改远端"), false)
             else -> loaded
@@ -122,6 +126,7 @@ class GoogleDriveSyncService(
                                     val written = api.download(remote).use { input -> repository.writeSyncFile(path, remote.mimeType, input, localMd5[path]) }
                                     if (written) {
                                         localDigests.remove(path)
+                                        localSnapshots.remove(path)
                                         downloaded++
                                     } else {
                                         val conflict = conflictPath(path, "Google Drive", conflictStamp())
@@ -197,7 +202,7 @@ class GoogleDriveSyncService(
         }
         val outcome = result(uploaded, downloaded, unchanged, conflicts, errors, false)
         if (outcome.isSuccessful && baselineStore != null) {
-            val baselineSaved = runCatching { saveBaseline(root, localDigests) }.getOrDefault(false)
+            val baselineSaved = runCatching { saveBaseline(root, localSnapshots) }.getOrDefault(false)
             if (!baselineSaved) return DriveSyncResult(uploaded, downloaded, unchanged, conflicts, listOf("无法保存同步基线"), false)
             completedChangeIds.forEach { id ->
                 if (changeStore?.acknowledge(id) != true) return DriveSyncResult(uploaded, downloaded, unchanged, conflicts, listOf("无法确认本地搬运历史"), false)
@@ -206,7 +211,7 @@ class GoogleDriveSyncService(
         return outcome
     }
 
-    private fun saveBaseline(root: DriveVaultRoot, localDigests: Map<String, LocalFileDigests>): Boolean {
+    private fun saveBaseline(root: DriveVaultRoot, localSnapshots: Map<String, LocalFileSnapshot>): Boolean {
         val local = repository.syncFilesStrict().associateBy { it.relativePath }
         val remoteFiles = linkedMapOf<String, DriveItem>()
         val folders = linkedMapOf("" to root.id)
@@ -214,10 +219,29 @@ class GoogleDriveSyncService(
         val files = buildMap {
             local.forEach { (path, file) ->
                 val remote = remoteFiles[path] ?: return@forEach
-                val sha = localDigests[path]?.sha256
-                    ?: LocalFileDigestsCalculator.computeDigests(repository.openSyncInput(file))?.sha256
-                    ?: return@forEach
-                put(path, DriveBaselineFile(path, sha, remote.id, remote.md5 ?: md5(api.download(remote)), remote.version))
+                val snapshot = localSnapshots[path]
+                val (digests, mtime, size) = if (snapshot != null &&
+                    snapshot.lastModified == file.document.lastModified &&
+                    snapshot.size == file.document.size
+                ) {
+                    Triple(snapshot.digests, snapshot.lastModified, snapshot.size)
+                } else {
+                    val fresh = LocalFileDigestsCalculator.computeDigests(repository.openSyncInput(file))
+                        ?: return@forEach
+                    Triple(fresh, file.document.lastModified, file.document.size)
+                }
+                val sha = digests.sha256
+                val localMd5 = digests.md5
+                put(path, DriveBaselineFile(
+                    path = path,
+                    localSha256 = sha,
+                    remoteId = remote.id,
+                    remoteMd5 = remote.md5 ?: localMd5,
+                    remoteVersion = remote.version,
+                    localMd5 = localMd5,
+                    localLastModified = mtime,
+                    localSize = size
+                ))
             }
         }
         return baselineStore?.save(DriveSyncBaseline(vaultId, root.id, accountId, files, System.currentTimeMillis())) ?: true

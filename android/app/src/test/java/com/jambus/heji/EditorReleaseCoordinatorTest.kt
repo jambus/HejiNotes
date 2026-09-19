@@ -152,4 +152,18 @@ class EditorReleaseCoordinatorTest {
         assertFalse(coordinator.isPendingDestroy(oldEditor))
         assertTrue(coordinator.isSerializing(newEditor))
     }
+
+    @Test
+    fun duplicateFinishAfterExpiryDestroysOldEditorOnlyOnce() {
+        val coordinator = EditorReleaseCoordinator<FakeEditor>()
+        val editor = FakeEditor("expired")
+        coordinator.onSerializationStarted(editor)
+        coordinator.release(editor) {}
+        var destroys = 0
+
+        coordinator.onSerializationCompleted(editor) { destroys++ }
+        coordinator.onSerializationCompleted(editor) { destroys++ }
+
+        assertEquals(1, destroys)
+    }
 }

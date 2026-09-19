@@ -6,6 +6,10 @@ Android 端使用系统相机 Intent/Activity Result，HarmonyOS 端使用
 `ohos.want.action.imageCapture`。两端都将返回 URI 的内容复制到 Vault 附件目录，
 使用拍摄时间加短随机码命名，并从文件签名字节确定扩展名和 MIME 类型。
 
+Android 照片会话由应用级协调器原子推进阶段。正文提交是不可取消边界：边界前接受取消并回滚已知
+未引用附件，边界后不做补偿性正文写入。提交前使用进入流程时的正文 SHA-256 防止覆盖外部修改；
+提交后以重读链接结果决定确认、回滚或保留事务标记。
+
 ## Constitution Check
 
 - [x] 使用系统相机，不额外申请直接控制相机权限。

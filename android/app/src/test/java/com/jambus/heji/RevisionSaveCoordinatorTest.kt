@@ -100,4 +100,29 @@ class RevisionSaveCoordinatorTest {
         assertFalse(coordinator.hasInFlightSave)
         assertFalse(coordinator.hasUnsavedChanges)
     }
+
+    @Test
+    fun missingDirtySnapshotRequiresExplicitRecoveryError() {
+        assertTrue(EditorRecoveryPolicy.requiresExplicitError(
+            restoredNoteMatches = true,
+            dirtyRevision = 7L,
+            savedRevision = 6L,
+            processRevision = 6L,
+            operationExpired = false
+        ))
+        assertFalse(EditorRecoveryPolicy.requiresExplicitError(
+            restoredNoteMatches = true,
+            dirtyRevision = 7L,
+            savedRevision = 6L,
+            processRevision = 7L,
+            operationExpired = false
+        ))
+        assertTrue(EditorRecoveryPolicy.requiresExplicitError(
+            restoredNoteMatches = false,
+            dirtyRevision = 0L,
+            savedRevision = 0L,
+            processRevision = 0L,
+            operationExpired = true
+        ))
+    }
 }

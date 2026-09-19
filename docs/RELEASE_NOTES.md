@@ -24,10 +24,11 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
 
 - Android 提供中文、English 与跟随系统的应用呈现偏好；偏好不改写 Vault。
 - 同步状态保留语义代码、计数与最多五项安全参数，并按当前语言渲染详情。
-- Android 同步实现单流双摘要（MD5 + SHA-256）与基线摘要复用初步架构，减少大文件重复读取（FR-322，待大文件真机压测）。
-- Android 照片校正完成手势排除移出 onDraw 与拖动刷新去重；引入不可变变换快照并转入后台媒体线程处理（FR-827、FR-828，待旋转与交互回归）。
-- Android 引入应用级串行协调器托管正文与媒体任务，解决配置重建与后台保存冲突风险（FR-807、FR-821、FR-822，待生命周期深度回归）。
-- 开展 Android 29–34 行为变化与 targetSdk 34 迁移审计，补齐 PendingIntent.FLAG_IMMUTABLE，并在清单就绪前台服务与通知权限（FR-531，当前维持 targetSdk 28，待分阶段升级）。
+- Android 的 SavedStateBundle 恢复覆盖页面上下文但不复制正文；保存操作使用唯一令牌和截止状态，失败快照仅驻留进程内并可在旋转后逐字恢复，快照缺失时显示恢复错误而不把 Vault 旧正文当作 dirty 自动保存（FR-808、FR-822、FR-823）。
+- Android 同步实现单次读取同时计算 MD5 与 SHA-256（FR-322）；每轮同步为全部文件重新计算摘要，并在该轮后续比较与基线更新中复用同一份本地快照，避免同轮重复读取。
+- Android 照片校正完成手势排除移出 onDraw 与拖动刷新去重（T837 代码完成，待真机验收）；照片会话以原子阶段区分可取消处理与不可取消提交，提交前校验已保存正文 hash，提交后以保守重读决定确认、回滚或保留恢复标记。
+- Android 引入应用级串行协调器（FR-807、FR-821、FR-822），配置重建不中断已确认写入；唯一保存令牌会拒绝超时后的晚到 JavaScript 回调并释放旧 WebView，写入失败的进程内快照支持旋转恢复。
+- 开展 Android 29–34 行为变化审计，清单就绪前台服务类型和权限，补齐 PendingIntent.FLAG_IMMUTABLE（FR-531，当前维持 targetSdk 28，动态通知权限待后续升级时实装）。
 - HAP 在 SDK 10 基线跟随系统语言；不提供应用内语言覆盖，等待兼容实现与真机验证。
 - 本条目不代表候选或发布；独立测试和设备验收尚未完成。
 
@@ -46,9 +47,7 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
 ### 当前验证
 
 - HAP 已通过 `./scripts/build-hap.sh` 构建；现有 ArkTS 异常处理与弃用 API 警告不由本次改名引入。
-- Android 上一个已记录验证的 `app-debug.apk` 包含 `com.jambus.heji`、`0.5.0` 与
-  `versionCode 9`；当前源码配置已提升为 `0.5.1`、`versionCode 10`，仍须使用 DevEco JBR
-  与 Android SDK 完成 fresh 单测和重新打包后，才能记录为本版本构建结果。
+- Android 当前源码已使用 DevEco JBR 与 Android SDK 完成 152 项本地单元测试（0 failure / 0 error / 0 skip）及 fresh debug APK 构建；产物为 `com.jambus.heji`、`versionName 0.5.1`、`versionCode 10`。照片取消/提交竞争、外部正文变化、Provider 不确定写入和旋转恢复仍须 Mate 60 真机故障注入验收，故本版本仍非候选。
 - 待执行 Mate 60 上的新安装、Vault 重新选择、云端重新授权和既有 Vault 互操作验证。
 
 ## 0.4.0 — 原 Markbook 当前开发版本

@@ -32,5 +32,5 @@
 ## 4. 迁移验证结论与后续步骤
 
 1. 当前工程 `targetSdk` 维持为 28，相关权限（`FOREGROUND_SERVICE_DATA_SYNC` 与 `POST_NOTIFICATIONS`）和代码（`FLAG_IMMUTABLE`）属于前置就绪。
-2. Vault SAF、`CaptureFileProvider` 相机存储、`WebView` 纯文本安全控制、后台服务与通知结构均已满足 Android 29–34 架构约束。
-3. 按照 T556 规范，后续分阶段正式切换 `targetSdk 34` 时，需结合 Mate 60 真机回归确认 HarmonyOS 4 兼容层的通知拦截与后台唤醒表现，在此之前保持准备与审计状态。
+2. 清单权限、PendingIntent 不可变标志和前台服务类型已就绪；实际提升至 `targetSdk 33+` 时的通知动态授权申请和高版本后台执行限制待在切换版本时结合真机回归落实，在此之前维持 targetSdk 28 前置准备状态。
+3. 按照 T556 规范，后续分阶段正式切换 `targetSdk 34` 时，需结合 Mate 60 真机回归确认 HarmonyOS 4 兼容层的通知拦截与后台唤醒表现。

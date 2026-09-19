@@ -112,6 +112,22 @@ class PhotoEditorView(context: android.content.Context, private val bitmap: Bitm
         handles = handles.map { PhotoTransformPoint(it.x, it.y) }
     )
 
+    fun getHandles(): List<PointF> = handles.map { PointF(it.x, it.y) }
+
+    fun restoreHandles(points: List<PointF>) {
+        if (points.size == 4) {
+            points.forEachIndexed { index, point ->
+                handles[index].set(
+                    point.x.coerceIn(0f, bitmap.width.toFloat()),
+                    point.y.coerceIn(0f, bitmap.height.toFloat())
+                )
+            }
+            selectionVisible = true
+            updateGestureExclusion()
+            invalidate()
+        }
+    }
+
     fun outputJpeg(quality: Int = 92): ByteArray {
         return PhotoTransformer.transform(bitmap, freezeTransformRequest(), quality)
     }

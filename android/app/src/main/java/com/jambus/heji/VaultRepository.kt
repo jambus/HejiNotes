@@ -22,7 +22,8 @@ data class VaultDocument(
     val mimeType: String?,
     val parentUri: Uri? = null,
     val relativePath: String = "",
-    val lastModified: Long? = null
+    val lastModified: Long? = null,
+    val size: Long? = null
 ) {
     val parentRelativePath: String
         get() = relativePath.substringBeforeLast('/', "")
@@ -34,6 +35,481 @@ data class PhotoAttachments(
     val relativeDirectory: String,
     val transactionUri: Uri
 )
+
+enum class PhotoPostSaveAction { CONFIRM, ROLLBACK, RETAIN_FOR_RECOVERY }
+
+object PhotoCommitPolicy {
+    fun bodySha256(content: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(content.toByteArray(StandardCharsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+
+    fun canBeginCommit(expectedBodyHash: String?, currentBody: String?): Boolean =
+        expectedBodyHash != null && currentBody != null && bodySha256(currentBody) == expectedBodyHash
+
+    fun afterSave(rereadBody: String?, exactLink: String): PhotoPostSaveAction = when {
+        rereadBody == null -> PhotoPostSaveAction.RETAIN_FOR_RECOVERY
+        rereadBody.contains(exactLink) -> PhotoPostSaveAction.CONFIRM
+        else -> PhotoPostSaveAction.ROLLBACK
+    }
+
+    fun insertPhotoAtCapturePoint(base: String, imageLink: String): String {
+        val insertion = "\n\n$imageLink\n\n"
+        val content = if (base.contains(MarkdownCodec.CARET_MARKER)) {
+            base.replace(MarkdownCodec.CARET_MARKER, insertion).trimEnd() + "\n"
+        } else {
+            base.trimEnd() + insertion
+        }
+        return if (base.replace(MarkdownCodec.CARET_MARKER, "").isBlank()) {
+            content.trimStart()
+        } else {
+            content
+        }
+    }
+
+    data class RawLine(
+        val start: Int,
+        val end: Int,
+        val endWithNewline: Int,
+        val text: String
+    )
+
+    fun splitRawLines(raw: String): List<RawLine> {
+        if (raw.isEmpty()) return emptyList()
+        val lines = mutableListOf<RawLine>()
+        var idx = 0
+        val len = raw.length
+        while (idx < len) {
+            val start = idx
+            while (idx < len && raw[idx] != '\r' && raw[idx] != '\n') {
+                idx++
+            }
+            val end = idx
+            if (idx < len && raw[idx] == '\r') {
+                idx++
+            }
+            if (idx < len && raw[idx] == '\n') {
+                idx++
+            }
+            val endWithNewline = idx
+            lines.add(RawLine(start, end, endWithNewline, raw.substring(start, end)))
+        }
+        return lines
+    }
+
+    private fun isTableDelimiterLine(text: String): Boolean {
+        val trimmed = text.trim()
+        if (!trimmed.contains('|')) return false
+        val cells = trimmed.split('|').map { it.trim().replace(" ", "") }.filter { it.isNotEmpty() }
+        if (cells.isEmpty()) return false
+        return cells.all { it.matches(Regex("^:?-+:?$")) }
+    }
+
+    private fun findTableRanges(lines: List<RawLine>): List<IntRange> {
+        val tableRanges = mutableListOf<IntRange>()
+        var i = 1
+        while (i < lines.size) {
+            if (isTableDelimiterLine(lines[i].text) && lines[i - 1].text.contains('|')) {
+                val tableStart = lines[i - 1].start
+                var endLine = i
+                var j = i + 1
+                while (j < lines.size && lines[j].text.trim().isNotEmpty() && lines[j].text.contains('|')) {
+                    endLine = j
+                    j++
+                }
+                val tableEnd = lines[endLine].endWithNewline
+                tableRanges.add(tableStart..tableEnd)
+                i = j
+            } else {
+                i++
+            }
+        }
+        return tableRanges
+    }
+
+    private fun findCodeBlockRanges(lines: List<RawLine>, rawLength: Int): List<IntRange> {
+        val ranges = mutableListOf<IntRange>()
+        var inFence = false
+        var fenceChar = ' '
+        var fenceLength = 0
+        var fenceStart = 0
+
+        for (line in lines) {
+            val trimmedLeading = line.text.trimStart()
+            val indent = line.text.length - trimmedLeading.length
+            if (indent <= 3) {
+                if (!inFence) {
+                    val backticks = trimmedLeading.takeWhile { it == '`' }
+                    val tildes = trimmedLeading.takeWhile { it == '~' }
+                    if (backticks.length >= 3) {
+                        inFence = true
+                        fenceChar = '`'
+                        fenceLength = backticks.length
+                        fenceStart = line.start
+                    } else if (tildes.length >= 3) {
+                        inFence = true
+                        fenceChar = '~'
+                        fenceLength = tildes.length
+                        fenceStart = line.start
+                    }
+                } else {
+                    val matchingChars = trimmedLeading.takeWhile { it == fenceChar }
+                    val rest = trimmedLeading.substring(matchingChars.length).trim()
+                    if (matchingChars.length >= fenceLength && rest.isEmpty()) {
+                        ranges.add(fenceStart..line.endWithNewline)
+                        inFence = false
+                    }
+                }
+            }
+        }
+        if (inFence) {
+            ranges.add(fenceStart..rawLength)
+        }
+        return ranges
+    }
+
+    private fun findFrontMatterRange(lines: List<RawLine>): IntRange? {
+        if (lines.isEmpty()) return null
+        if (lines[0].text.trim() != "---") return null
+        for (i in 1 until lines.size) {
+            if (lines[i].text.trim() == "---") {
+                return 0..lines[i].endWithNewline
+            }
+        }
+        return null
+    }
+
+    private fun findInlineCodeRanges(lineText: String, lineStart: Int): List<IntRange> {
+        val ranges = mutableListOf<IntRange>()
+        var i = 0
+        while (i < lineText.length) {
+            if (lineText[i] == '`') {
+                val fenceStart = i
+                while (i < lineText.length && lineText[i] == '`') {
+                    i++
+                }
+                val fenceLen = i - fenceStart
+                val fenceStr = "`".repeat(fenceLen)
+                val closeIdx = lineText.indexOf(fenceStr, i)
+                if (closeIdx != -1) {
+                    val end = closeIdx + fenceLen
+                    ranges.add((lineStart + fenceStart)..(lineStart + end))
+                    i = end
+                }
+            } else {
+                i++
+            }
+        }
+        return ranges
+    }
+
+    private val linkRegex = Regex("""!?\[[^\]]*\]\([^)]*\)""")
+    private val htmlTagOrCommentRegex = Regex("""<!--.*?-->|<[a-zA-Z/][^>]*>""")
+    private val atxHeadingRegex = Regex("""^[ ]{0,3}#{1,6}(\s.*|$)""")
+    private val setextHeadingRegex = Regex("""^[ ]{0,3}(=+|-+)[ ]*$""")
+
+    private fun interpolateWhitespace(
+        normGap: String,
+        rawGap: String,
+        cursorInGap: Int,
+        rawStart: Int,
+        rawEnd: Int
+    ): Int {
+        if (rawGap.isEmpty() || rawStart >= rawEnd) return rawStart
+        if (normGap.isEmpty()) return rawStart
+
+        val clampedCursor = cursorInGap.coerceIn(0, normGap.length)
+        if (clampedCursor == 0) return rawStart
+        if (clampedCursor == normGap.length) return rawEnd
+
+        val normNls = mutableListOf<Int>()
+        for (i in normGap.indices) {
+            if (normGap[i] == '\n') normNls.add(i)
+        }
+
+        val rawNls = mutableListOf<Int>()
+        for (j in rawGap.indices) {
+            if (rawGap[j] == '\n') rawNls.add(j)
+        }
+
+        if (normNls.isEmpty()) {
+            if (rawNls.isEmpty()) {
+                val ratio = clampedCursor.toDouble() / normGap.length
+                val rawOffsetInGap = (ratio * rawGap.length).toInt()
+                return (rawStart + rawOffsetInGap).coerceIn(rawStart, rawEnd)
+            } else {
+                val firstNl = rawNls.first()
+                val spaceLimit = if (firstNl > 0 && rawGap[firstNl - 1] == '\r') firstNl - 1 else firstNl
+                return (rawStart + minOf(clampedCursor, spaceLimit)).coerceIn(rawStart, rawEnd)
+            }
+        }
+
+        if (rawNls.isEmpty()) {
+            val ratio = clampedCursor.toDouble() / normGap.length
+            return (rawStart + (ratio * rawGap.length).toInt()).coerceIn(rawStart, rawEnd)
+        }
+
+        val firstNormNl = normNls.first()
+        val lastNormNl = normNls.last()
+
+        if (clampedCursor <= firstNormNl) {
+            val firstRawNl = rawNls.first()
+            val rawTrailingBeforeNl = if (firstRawNl > 0 && rawGap[firstRawNl - 1] == '\r') firstRawNl - 1 else firstRawNl
+            return (rawStart + minOf(clampedCursor, rawTrailingBeforeNl)).coerceIn(rawStart, rawEnd)
+        }
+
+        if (clampedCursor > lastNormNl) {
+            val distFromEnd = normGap.length - clampedCursor
+            val lastRawNl = rawNls.last()
+            val rawLeadingAfterNl = rawGap.length - (lastRawNl + 1)
+            val offsetFromEnd = minOf(distFromEnd, rawLeadingAfterNl)
+            return (rawEnd - offsetFromEnd).coerceIn(rawStart, rawEnd)
+        }
+
+        val normNlsBefore = normGap.substring(0, clampedCursor).count { it == '\n' }
+        val rawTargetNlIdx = (normNlsBefore - 1).coerceIn(0, rawNls.size - 1)
+        val rawNlPos = rawNls[rawTargetNlIdx]
+        return (rawStart + rawNlPos + 1).coerceIn(rawStart, rawEnd)
+    }
+
+    fun mapNormalizedOffsetToRaw(raw: String, normalizedOffset: Int, normalized: String? = null): Int {
+        if (normalizedOffset <= 0) return 0
+        if (raw.isEmpty()) return 0
+        if (normalized == null || normalized.isEmpty()) {
+            var norm = 0
+            var rawIndex = 0
+            while (rawIndex < raw.length && norm < normalizedOffset) {
+                if (raw.startsWith("\r\n", rawIndex)) {
+                    rawIndex += 2
+                } else {
+                    rawIndex += 1
+                }
+                norm += 1
+            }
+            return rawIndex.coerceIn(0, raw.length)
+        }
+
+        val targetNorm = normalizedOffset.coerceIn(0, normalized.length)
+        if (targetNorm == 0) return 0
+        if (targetNorm == normalized.length) return raw.length
+
+        val normNonWs = mutableListOf<Int>()
+        for (i in normalized.indices) {
+            if (!normalized[i].isWhitespace()) {
+                normNonWs.add(i)
+            }
+        }
+
+        val rawNonWs = mutableListOf<Int>()
+        for (j in raw.indices) {
+            if (!raw[j].isWhitespace()) {
+                rawNonWs.add(j)
+            }
+        }
+
+        if (normNonWs.isEmpty()) {
+            return 0
+        }
+        if (rawNonWs.isEmpty()) {
+            return raw.length
+        }
+
+        val normToRaw = IntArray(normNonWs.size) { -1 }
+        var rIdx = 0
+        var nIdx = 0
+        while (nIdx < normNonWs.size && rIdx < rawNonWs.size) {
+            val nChar = normalized[normNonWs[nIdx]]
+            val rChar = raw[rawNonWs[rIdx]]
+            if (nChar == rChar) {
+                normToRaw[nIdx] = rIdx
+                nIdx++
+                rIdx++
+            } else {
+                val maxLookahead = 25
+                var foundN = -1
+                var foundR = -1
+                outer@ for (dist in 1..maxLookahead) {
+                    for (di in 0..dist) {
+                        val dj = dist - di
+                        val ni = nIdx + di
+                        val rj = rIdx + dj
+                        if (ni < normNonWs.size && rj < rawNonWs.size &&
+                            normalized[normNonWs[ni]] == raw[rawNonWs[rj]]) {
+                            foundN = ni
+                            foundR = rj
+                            break@outer
+                        }
+                    }
+                }
+                if (foundN != -1 && foundR != -1) {
+                    nIdx = foundN
+                    rIdx = foundR
+                    normToRaw[nIdx] = rIdx
+                    nIdx++
+                    rIdx++
+                } else {
+                    nIdx++
+                }
+            }
+        }
+
+        if (targetNorm <= normNonWs.first()) {
+            val firstMatchedRaw = normToRaw.firstOrNull { it != -1 } ?: 0
+            val rawLimit = rawNonWs[firstMatchedRaw]
+            val normGap = normalized.substring(0, normNonWs.first())
+            val rawGap = raw.substring(0, rawLimit)
+            return interpolateWhitespace(normGap, rawGap, targetNorm, 0, rawLimit)
+        }
+
+        if (targetNorm > normNonWs.last()) {
+            val lastMatchedNorm = normToRaw.indexOfLast { it != -1 }
+            val lastMatchedRaw = if (lastMatchedNorm != -1) normToRaw[lastMatchedNorm] else rawNonWs.size - 1
+            val rawStart = rawNonWs[lastMatchedRaw] + 1
+            val normGap = normalized.substring(normNonWs.last() + 1)
+            val rawGap = if (rawStart <= raw.length) raw.substring(rawStart) else ""
+            val cursorInGap = targetNorm - (normNonWs.last() + 1)
+            return interpolateWhitespace(normGap, rawGap, cursorInGap, rawStart, raw.length)
+        }
+
+        var low = 0
+        var high = normNonWs.size - 1
+        var k = 0
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            if (normNonWs[mid] < targetNorm) {
+                k = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+
+        if (targetNorm == normNonWs[k]) {
+            val r = if (normToRaw[k] != -1) rawNonWs[normToRaw[k]] else (raw.length * targetNorm / normalized.length)
+            return r.coerceIn(0, raw.length)
+        }
+
+        if (k + 1 < normNonWs.size && targetNorm == normNonWs[k + 1]) {
+            val nextR = if (normToRaw[k + 1] != -1) rawNonWs[normToRaw[k + 1]] else (raw.length * targetNorm / normalized.length)
+            return nextR.coerceIn(0, raw.length)
+        }
+
+        val rK = if (normToRaw[k] != -1) {
+            rawNonWs[normToRaw[k]]
+        } else {
+            val prevMatched = (k downTo 0).firstOrNull { normToRaw[it] != -1 }
+            if (prevMatched != null) rawNonWs[normToRaw[prevMatched]] else 0
+        }
+
+        val rKNext = if (k + 1 < normNonWs.size && normToRaw[k + 1] != -1) {
+            rawNonWs[normToRaw[k + 1]]
+        } else {
+            val nextMatched = ((k + 1) until normNonWs.size).firstOrNull { normToRaw[it] != -1 }
+            if (nextMatched != null) rawNonWs[normToRaw[nextMatched]] else raw.length
+        }
+
+        val rawGapStart = (rK + 1).coerceAtMost(raw.length)
+        val rawGapEnd = rKNext.coerceIn(rawGapStart, raw.length)
+
+        val normGapStart = normNonWs[k] + 1
+        val normGapEnd = normNonWs[k + 1]
+        val normGap = normalized.substring(normGapStart, normGapEnd)
+        val rawGap = raw.substring(rawGapStart, rawGapEnd)
+        val cursorInGap = targetNorm - normGapStart
+
+        return interpolateWhitespace(normGap, rawGap, cursorInGap, rawGapStart, rawGapEnd)
+    }
+
+    fun adjustToSafeTokenBoundary(raw: String, offset: Int): Int {
+        var safeOffset = offset.coerceIn(0, raw.length)
+        if (safeOffset == 0 || safeOffset == raw.length) return safeOffset
+
+        if (safeOffset > 0 && safeOffset < raw.length && raw[safeOffset - 1] == '\r' && raw[safeOffset] == '\n') {
+            safeOffset++
+        }
+        if (safeOffset >= raw.length) return raw.length
+
+        val lines = splitRawLines(raw)
+        if (lines.isEmpty()) return safeOffset
+
+        val frontMatter = findFrontMatterRange(lines)
+        if (frontMatter != null && safeOffset in frontMatter.first until frontMatter.last) {
+            return frontMatter.last.coerceAtMost(raw.length)
+        }
+
+        val codeBlocks = findCodeBlockRanges(lines, raw.length)
+        for (block in codeBlocks) {
+            if (safeOffset in block.first until block.last) {
+                return block.last.coerceAtMost(raw.length)
+            }
+        }
+
+        val tables = findTableRanges(lines)
+        for (table in tables) {
+            if (safeOffset in table.first until table.last) {
+                return table.last.coerceAtMost(raw.length)
+            }
+        }
+
+        for (line in lines) {
+            if (line.text.matches(atxHeadingRegex)) {
+                if (safeOffset in line.start until line.endWithNewline) {
+                    return line.endWithNewline.coerceAtMost(raw.length)
+                }
+            }
+        }
+        for (i in 0 until lines.size - 1) {
+            if (lines[i].text.isNotBlank() && lines[i + 1].text.matches(setextHeadingRegex)) {
+                if (safeOffset in lines[i].start until lines[i + 1].endWithNewline) {
+                    return lines[i + 1].endWithNewline.coerceAtMost(raw.length)
+                }
+            }
+        }
+
+        val currentLine = lines.firstOrNull { safeOffset in it.start..it.endWithNewline }
+        if (currentLine != null) {
+            val codeSpans = findInlineCodeRanges(currentLine.text, currentLine.start)
+            for (span in codeSpans) {
+                if (safeOffset in (span.first + 1) until span.last) {
+                    safeOffset = span.last
+                }
+            }
+
+            for (match in linkRegex.findAll(currentLine.text)) {
+                val start = currentLine.start + match.range.first
+                val end = currentLine.start + match.range.last + 1
+                if (safeOffset in (start + 1) until end) {
+                    safeOffset = end
+                }
+            }
+
+            for (match in htmlTagOrCommentRegex.findAll(currentLine.text)) {
+                val start = currentLine.start + match.range.first
+                val end = currentLine.start + match.range.last + 1
+                if (safeOffset in (start + 1) until end) {
+                    safeOffset = end
+                }
+            }
+
+            if (currentLine.text.isNotBlank() && safeOffset in currentLine.start until currentLine.end) {
+                val trailing = raw.substring(safeOffset, currentLine.end)
+                if (trailing.isNotEmpty() && trailing.isBlank()) {
+                    safeOffset = currentLine.end
+                }
+            }
+        }
+
+        if (safeOffset > 0 && safeOffset < raw.length && raw[safeOffset - 1] == '\r' && raw[safeOffset] == '\n') {
+            safeOffset++
+        }
+
+        return safeOffset.coerceIn(0, raw.length)
+    }
+
+    fun safeInsertPoint(raw: String, normalizedOffset: Int, normalized: String? = null): Int {
+        val rawOffset = mapNormalizedOffsetToRaw(raw, normalizedOffset, normalized)
+        return adjustToSafeTokenBoundary(raw, rawOffset)
+    }
+}
 
 data class VideoAttachment(
     val name: String,
@@ -54,6 +530,12 @@ enum class VaultFailureKind {
 sealed class NoteReadResult {
     data class Success(val content: String) : NoteReadResult()
     data class Failure(val kind: VaultFailureKind) : NoteReadResult()
+}
+
+interface NoteReadWriter {
+    fun saveText(document: VaultDocument, content: String): Boolean
+    fun refreshDocument(document: VaultDocument): VaultDocument?
+    fun readNote(document: VaultDocument): NoteReadResult
 }
 
 sealed class DailyNoteResult {
@@ -115,7 +597,7 @@ sealed class VaultMutationResult {
     data class Failure(val kind: VaultMutationFailureKind, val message: String? = null) : VaultMutationResult()
 }
 
-class VaultRepository(private val context: Context, private val fixedVaultUri: Uri? = null) {
+class VaultRepository(private val context: Context, private val fixedVaultUri: Uri? = null) : NoteReadWriter {
     private val resolver: ContentResolver = context.contentResolver
     private val preferences = context.getSharedPreferences("heji_notes", Context.MODE_PRIVATE)
 
@@ -278,7 +760,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
     fun isDirectory(document: VaultDocument): Boolean =
         document.mimeType == DocumentsContract.Document.MIME_TYPE_DIR
 
-    fun refreshDocument(document: VaultDocument): VaultDocument? {
+    override fun refreshDocument(document: VaultDocument): VaultDocument? {
         val tree = savedVaultUri() ?: return null
         val parent = document.parentUri ?: return null
         return findChild(tree, parent, document.name, document.parentRelativePath)
@@ -362,7 +844,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         is DailyNoteResult.Failure -> null
     }
 
-    fun readNote(document: VaultDocument): NoteReadResult {
+    override fun readNote(document: VaultDocument): NoteReadResult {
         return try {
             val content = resolver.openInputStream(document.uri)?.use {
                 String(it.readBytes(), StandardCharsets.UTF_8)
@@ -379,6 +861,8 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         is NoteReadResult.Success -> result.content
         is NoteReadResult.Failure -> null
     }
+
+    fun bodySha256(content: String): String = PhotoCommitPolicy.bodySha256(content)
 
     /** Resolves interrupted Vault transactions throughout the user-editable Vault. */
     fun recoverVault(): VaultRecoveryResult {
@@ -416,7 +900,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         null
     }
 
-    fun saveText(document: VaultDocument, content: String): Boolean {
+    override fun saveText(document: VaultDocument, content: String): Boolean {
         val parent = document.parentUri ?: return false
         val tempName = ".markbook-${UUID.randomUUID()}.tmp"
         val temp = DocumentsContract.createDocument(resolver, parent, "text/plain", tempName)
@@ -553,13 +1037,31 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
             if (VaultNamePolicy.conflicts(noteName, listChildrenStrict(tree, destination.uri, destination.relativePath).map { it.name })) {
                 return VaultMutationResult.Failure(VaultMutationFailureKind.NAME_CONFLICT, "目标目录已有同名笔记或文件夹")
             }
-            val bundleCandidates = listOf(NoteBundleMovePolicy.bundlePath(document.relativePath), NoteBundleMovePolicy.legacyBundlePath(document.relativePath))
-                .distinct().filter { findByRelativePath(tree, it)?.let(::isDirectory) == true }
-            if (bundleCandidates.size > 1) return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "检测到多个同名附件目录，无法判断归属")
-            val sourceBundlePath = bundleCandidates.singleOrNull()
-            val sourceBundle = sourceBundlePath?.let { findByRelativePath(tree, it) }
             val markdown = readText(document) ?: return VaultMutationResult.Failure(VaultMutationFailureKind.READ_FAILED, "无法读取要移动的笔记")
-            if (markdownReferencesBundle(tree, document, sourceBundlePath ?: "")) {
+            val colocatedBundlePath = NoteBundleMovePolicy.bundlePath(document.relativePath)
+            val legacyBundlePath = NoteBundleMovePolicy.legacyBundlePath(document.relativePath)
+            val colocatedExists = findByRelativePath(tree, colocatedBundlePath)?.let(::isDirectory) == true
+            val legacyExists = findByRelativePath(tree, legacyBundlePath)?.let(::isDirectory) == true
+
+            val resolution = NoteBundleMovePolicy.resolveSourceBundle(
+                noteRelativePath = document.relativePath,
+                markdown = markdown,
+                colocatedExists = colocatedExists,
+                legacyExists = legacyExists
+            )
+            val sourceBundlePath = when (resolution) {
+                is NoteBundleMovePolicy.ResolvedSourceBundle.Found -> resolution.bundlePath
+                is NoteBundleMovePolicy.ResolvedSourceBundle.None -> null
+                is NoteBundleMovePolicy.ResolvedSourceBundle.AmbiguousReference ->
+                    return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "附件链接无法安全重写")
+                is NoteBundleMovePolicy.ResolvedSourceBundle.MultipleReferencedBundles ->
+                    return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "检测到多个同名附件目录且均被引用，无法安全移动")
+            }
+            val sourceBundle = sourceBundlePath?.let { findByRelativePath(tree, it) }
+            if (sourceBundlePath != null && sourceBundle == null) {
+                return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "Vault 在移动前发生变化，请重试")
+            }
+            if (sourceBundlePath != null && markdownReferencesBundle(tree, document, sourceBundlePath)) {
                 return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "附件被其他笔记使用，无法安全移动")
             }
             val targetPath = joinRelativePath(destination.relativePath, document.name)
@@ -587,7 +1089,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
                 return VaultMutationResult.Failure(VaultMutationFailureKind.CREATE_FAILED, "无法记录本地移动历史")
             }
             if (sha256(readText(document) ?: "") != sha256(markdown) ||
-                markdownReferencesBundle(tree, document, sourceBundlePath ?: "")) {
+                (sourceBundlePath != null && markdownReferencesBundle(tree, document, sourceBundlePath))) {
                 abortPreparedMove(marker, changeId)
                 return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "Vault 在移动前发生变化，请重试")
             }
@@ -1064,6 +1566,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
 
     /** A bundle cannot move unless every user Markdown file is readable and no peer references it. */
     private fun markdownReferencesBundle(tree: Uri, moving: VaultDocument, bundlePath: String): Boolean {
+        if (bundlePath.isBlank()) return false
         fun scan(directory: VaultDocument): Boolean {
             listChildrenStrict(tree, directory.uri, directory.relativePath).forEach { child ->
                 if (isInternalPath(child.relativePath)) return@forEach
@@ -1210,7 +1713,9 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
             // Note and bundle are at target but old Markdown remains: verified completion is safe.
             if (source == null && target != null && (transaction.sourceBundle.isBlank() || targetBundle != null) &&
                 readText(target)?.let(::sha256) == transaction.sourceHash) {
-                val rewritten = runCatching {
+                val rewritten = if (transaction.sourceBundle.isBlank()) {
+                    readText(target) ?: return@forEach
+                } else runCatching {
                     NoteBundleMovePolicy.rewriteBundleReferences(
                         readText(target) ?: return@forEach,
                         transaction.sourceNote.substringBeforeLast('/', ""),
@@ -1446,13 +1951,15 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE,
-            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            DocumentsContract.Document.COLUMN_SIZE
         )
         return resolver.query(children, projection, null, null, null)?.use { cursor ->
             val nameIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
             val idIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
             val mimeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
             val modifiedIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            val sizeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
             buildList {
                 while (cursor.moveToNext()) {
                     val name = cursor.getString(nameIndex) ?: continue
@@ -1464,7 +1971,8 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
                         cursor.getString(mimeIndex),
                         parent,
                         joinRelativePath(parentRelativePath, name),
-                        if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex)) cursor.getLong(modifiedIndex) else null
+                        if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex)) cursor.getLong(modifiedIndex) else null,
+                        if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else null
                     ))
                 }
             }

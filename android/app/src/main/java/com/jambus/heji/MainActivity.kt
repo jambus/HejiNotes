@@ -62,6 +62,7 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val autosave = Runnable { saveCurrentNote() }
     private val saveCoordinator = RevisionSaveCoordinator()
+    private var restoredSaveCoordinatorNoteUri: String? = null
     private val saveWaiters = mutableListOf<(Boolean) -> Unit>()
     private var editorGeneration = 0L
     private val editorReleaseCoordinator = EditorReleaseCoordinator<WebView>()
@@ -101,6 +102,8 @@ class MainActivity : Activity() {
     private var photoModeActions: List<TextView> = emptyList()
     private var photoSavePending = false
     private var photoContextContent: String? = null
+    private var photoSavedBodyHash: String? = null
+    private var photoContextCaretOffset = 0
     private var photoContextScrollY = 0
     private var pendingVideoSession: PendingVideoCaptureSession? = null
     private var videoMetadata: VideoCapturePolicy.Metadata? = null
@@ -139,7 +142,209 @@ class MainActivity : Activity() {
         driveAuth = GoogleDriveAuth(this)
         if (!BackgroundSyncService.isActive()) SyncTaskStateStore(this).markInterruptedIfRunning()
         applyWindowColors()
-        if (repository.savedVaultUri() == null) showWelcome() else recoverVaultAndOpenBrowser()
+        if (repository.savedVaultUri() == null) {
+            showWelcome()
+        } else if (savedInstanceState != null) {
+            restoreInstanceState(savedInstanceState)
+        } else {
+            recoverVaultAndOpenBrowser()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(SavedStateBundle.KEY_SCREEN, screen.name)
+
+        // Browser state
+        outState.putStringArrayList(SavedStateBundle.KEY_BROWSER_PATH, ArrayList(browserPath))
+        outState.putInt(SavedStateBundle.KEY_BROWSER_SCROLL_Y, browserScrollY)
+        browserDirectory?.let { SavedStateBundle.putDocument(outState, "heji_browser_dir", it) }
+
+        // Editor state
+        val note = currentNote
+        if (note != null) {
+            SavedStateBundle.putDocument(outState, SavedStateBundle.PREFIX_NOTE, note)
+            val scrollY = webView?.scrollY ?: pendingEditorScrollY ?: 0
+            outState.putInt(SavedStateBundle.KEY_EDITOR_SCROLL_Y, scrollY)
+            outState.putBoolean(SavedStateBundle.KEY_OPENED_FROM_SEARCH, openedFromSearch)
+            outState.putInt(SavedStateBundle.KEY_SEARCH_RESULT_FOCUS, searchResultFocus)
+            outState.putLong("heji_save_curr_rev", saveCoordinator.revision)
+            outState.putLong("heji_save_persisted_rev", saveCoordinator.persistedRevision)
+            outState.putBoolean("heji_save_failed", saveCoordinator.state == RevisionSaveCoordinator.State.FAILED)
+        }
+
+        // Search state
+        outState.putString(SavedStateBundle.KEY_SEARCH_QUERY, searchQuery)
+        outState.putInt(SavedStateBundle.KEY_SEARCH_SCROLL_Y, searchScrollY)
+        outState.putInt(SavedStateBundle.KEY_SEARCH_RESULT_FOCUS, searchResultFocus)
+        outState.putBoolean(SavedStateBundle.KEY_OPENED_FROM_SEARCH, openedFromSearch)
+
+        // Photo state
+        captureFile?.let {
+            outState.putString(SavedStateBundle.KEY_PHOTO_CAPTURE_PATH, it.absolutePath)
+        }
+        editorView?.let { ev ->
+            outState.putString(SavedStateBundle.KEY_PHOTO_MODE, ev.mode.name)
+            SavedStateBundle.putHandles(outState, ev.getHandles())
+        }
+        outState.putBoolean(SavedStateBundle.KEY_PHOTO_SAVE_PENDING, photoSavePending)
+        photoSavedBodyHash?.let { outState.putString(SavedStateBundle.KEY_PHOTO_SAVED_BODY_HASH, it) }
+        outState.putInt(SavedStateBundle.KEY_PHOTO_CARET_OFFSET, photoContextCaretOffset)
+        outState.putInt(SavedStateBundle.KEY_PHOTO_CONTEXT_SCROLL_Y, photoContextScrollY)
+
+        // Trash state
+        outState.putInt(SavedStateBundle.KEY_TRASH_SCROLL_Y, trashBrowserScrollY)
+    }
+
+    private fun restoreInstanceState(savedInstanceState: Bundle) {
+        val screenName = savedInstanceState.getString(SavedStateBundle.KEY_SCREEN)
+        val savedScreen = screenName?.let {
+            try { Screen.valueOf(it) } catch (_: Exception) { null }
+        } ?: Screen.BROWSER
+
+        val pathList = savedInstanceState.getStringArrayList(SavedStateBundle.KEY_BROWSER_PATH)
+        if (pathList != null) {
+            browserPath.clear()
+            browserPath.addAll(pathList)
+        }
+        browserScrollY = savedInstanceState.getInt(SavedStateBundle.KEY_BROWSER_SCROLL_Y, 0)
+        val savedBrowserDir = SavedStateBundle.getDocument(savedInstanceState, "heji_browser_dir")
+        if (savedBrowserDir != null) {
+            browserDirectory = savedBrowserDir
+        }
+
+        val currRev = savedInstanceState.getLong("heji_save_curr_rev", 0L)
+        val persRev = savedInstanceState.getLong("heji_save_persisted_rev", 0L)
+        val isFailed = savedInstanceState.getBoolean("heji_save_failed", false)
+        val savedNote = SavedStateBundle.getDocument(savedInstanceState, SavedStateBundle.PREFIX_NOTE)
+        if (currRev > 0 || persRev > 0 || isFailed) {
+            saveCoordinator.restore(currRev, persRev, isFailed)
+            restoredSaveCoordinatorNoteUri = savedNote?.uri?.toString()
+        }
+
+        searchQuery = savedInstanceState.getString(SavedStateBundle.KEY_SEARCH_QUERY, "")
+        searchScrollY = savedInstanceState.getInt(SavedStateBundle.KEY_SEARCH_SCROLL_Y, 0)
+        searchResultFocus = savedInstanceState.getInt(SavedStateBundle.KEY_SEARCH_RESULT_FOCUS, -1)
+        openedFromSearch = savedInstanceState.getBoolean(SavedStateBundle.KEY_OPENED_FROM_SEARCH, false)
+
+        trashBrowserScrollY = savedInstanceState.getInt(SavedStateBundle.KEY_TRASH_SCROLL_Y, 0)
+
+        when (savedScreen) {
+            Screen.BROWSER -> {
+                showVaultBrowser(resetToRoot = false)
+            }
+            Screen.EDITOR, Screen.EDITOR_LOADING -> {
+                val capturePath = savedInstanceState.getString(SavedStateBundle.KEY_PHOTO_CAPTURE_PATH)
+                val capture = capturePath?.let { File(it) }
+                if (capture != null && capture.exists()) {
+                    captureFile = capture
+                    captureUri = Uri.parse("content://$FILE_PROVIDER_AUTHORITY/capture/${capture.name}")
+                    photoSavedBodyHash = savedInstanceState.getString(SavedStateBundle.KEY_PHOTO_SAVED_BODY_HASH)
+                    photoContextCaretOffset = savedInstanceState.getInt(SavedStateBundle.KEY_PHOTO_CARET_OFFSET, 0)
+                    photoContextScrollY = savedInstanceState.getInt(SavedStateBundle.KEY_PHOTO_CONTEXT_SCROLL_Y, 0)
+                }
+                val note = SavedStateBundle.getDocument(savedInstanceState, SavedStateBundle.PREFIX_NOTE)
+                if (note != null) {
+                    currentNote = note
+                    if (capture == null || !capture.exists()) {
+                        pendingEditorScrollY = savedInstanceState.getInt(SavedStateBundle.KEY_EDITOR_SCROLL_Y, 0)
+                        openNote(note)
+                    }
+                } else {
+                    showVaultBrowser(resetToRoot = false)
+                }
+            }
+            Screen.PHOTO -> {
+                val capturePath = savedInstanceState.getString(SavedStateBundle.KEY_PHOTO_CAPTURE_PATH)
+                val note = SavedStateBundle.getDocument(savedInstanceState, SavedStateBundle.PREFIX_NOTE)
+                val file = capturePath?.let { File(it) }
+                val wasSaving = savedInstanceState.getBoolean(SavedStateBundle.KEY_PHOTO_SAVE_PENDING, false)
+                if (file != null && file.exists() && note != null) {
+                    captureFile = file
+                    currentNote = note
+                    // The Vault remains the only persisted body source; photo body context is not bundled.
+                    photoContextContent = null
+                    photoSavedBodyHash = savedInstanceState.getString(SavedStateBundle.KEY_PHOTO_SAVED_BODY_HASH)
+                    photoContextCaretOffset = savedInstanceState.getInt(SavedStateBundle.KEY_PHOTO_CARET_OFFSET, 0)
+                    photoContextScrollY = savedInstanceState.getInt(SavedStateBundle.KEY_PHOTO_CONTEXT_SCROLL_Y, 0)
+                    val bitmap = decodeCapturePreview(file)
+                    if (bitmap != null) {
+                        showPhotoEditor(bitmap)
+                        val modeName = savedInstanceState.getString(SavedStateBundle.KEY_PHOTO_MODE)
+                        val mode = modeName?.let {
+                            try { PhotoEditMode.valueOf(it) } catch (_: Exception) { null }
+                        } ?: PhotoEditMode.RECTANGLE
+                        editorView?.let { ev ->
+                            setPhotoMode(ev, mode)
+                            val handles = SavedStateBundle.getHandles(savedInstanceState)
+                            if (handles != null) {
+                                ev.restoreHandles(handles)
+                            }
+                        }
+                        if (wasSaving || AppNoteSaveCoordinator.hasPhotoSession(file.absolutePath)) {
+                            photoSavePending = true
+                            photoInsertAction?.isEnabled = false
+                            photoModeActions.forEach { it.isEnabled = false }
+                            photoStatusView?.text = "正在写入原图、校正图和笔记…"
+                            AppNoteSaveCoordinator.observePhotoSession(file.absolutePath) { result ->
+                                when (result) {
+                                    is AppNoteSaveCoordinator.PhotoSessionResult.Success -> {
+                                        if (!bitmap.isRecycled) bitmap.recycle()
+                                        discardCaptureFile()
+                                        currentNote = result.refreshedNote
+                                        photoSavePending = false
+                                        pendingEditorScrollY = photoContextScrollY
+                                        pendingCaretImagePath = result.attachmentName
+                                        openNote(result.refreshedNote)
+                                    }
+                                    is AppNoteSaveCoordinator.PhotoSessionResult.Failure -> {
+                                        photoSavePending = false
+                                        photoInsertAction?.isEnabled = true
+                                        photoModeActions.forEach { it.isEnabled = true }
+                                        photoStatusView?.text = result.message
+                                    }
+                                    AppNoteSaveCoordinator.PhotoSessionResult.InProgress -> Unit
+                                }
+                            }
+                        }
+                    } else {
+                        openNote(note)
+                    }
+                } else if (note != null) {
+                    openNote(note)
+                } else {
+                    showVaultBrowser(resetToRoot = false)
+                }
+            }
+            Screen.SEARCH -> {
+                showSearch()
+            }
+            Screen.SETTINGS -> {
+                showSettings()
+            }
+            Screen.TRASH, Screen.TRASH_VIEWER -> {
+                showTrashBrowser()
+            }
+            Screen.DAILY_FOLDER_PICKER -> {
+                showDailyFolderPicker()
+            }
+            Screen.DRIVE_SETUP -> {
+                showDriveSetup()
+            }
+            Screen.DRIVE_DETAILS -> {
+                showSyncDetails()
+            }
+            Screen.DRIVE_FOLDER_PICKER, Screen.DRIVE_CONFIRM -> {
+                showDriveSetup()
+            }
+            Screen.VIDEO -> {
+                val note = SavedStateBundle.getDocument(savedInstanceState, SavedStateBundle.PREFIX_NOTE)
+                if (note != null) openNote(note) else showVaultBrowser(resetToRoot = false)
+            }
+            Screen.WELCOME, Screen.EDITOR_ERROR -> {
+                recoverVaultAndOpenBrowser()
+            }
+        }
     }
 
     override fun onPause() {
@@ -1456,20 +1661,72 @@ class MainActivity : Activity() {
         currentNote = note
         showNoteLoading(note, "正在读取笔记…")
         val generation = editorGeneration
-        noteIoExecutor.execute {
-            val result = repository.readNote(note)
-            runOnUiThread {
-                if (!editorRequestIsCurrent(generation, note)) return@runOnUiThread
-                when (result) {
-                    is NoteReadResult.Success -> showEditor(note, result.content)
-                    is NoteReadResult.Failure -> showNoteOpenError(
-                        note,
-                        result.kind,
-                        "原笔记未被修改"
-                    ) { openNote(note) }
+        AppNoteSaveCoordinator.submitRead(repository, note) { result ->
+            if (!editorRequestIsCurrent(generation, note)) return@submitRead
+            when (result) {
+                is NoteReadResult.Success -> when (val recovery = AppNoteSaveCoordinator.noteRecovery(note.uri.toString())) {
+                    is AppNoteSaveCoordinator.NoteRecovery.Failed -> {
+                        saveCoordinator.restore(
+                            maxOf(saveCoordinator.revision, recovery.snapshot.revision),
+                            saveCoordinator.persistedRevision,
+                            failed = true
+                        )
+                        restoredSaveCoordinatorNoteUri = note.uri.toString()
+                        showEditor(note, recovery.snapshot.content)
+                    }
+                    AppNoteSaveCoordinator.NoteRecovery.Active -> showNoteLoading(note, "正在恢复未完成的保存…")
+                    AppNoteSaveCoordinator.NoteRecovery.Expired -> {
+                        if (EditorRecoveryPolicy.requiresExplicitError(
+                                restoredSaveCoordinatorNoteUri == note.uri.toString(),
+                                saveCoordinator.revision,
+                                saveCoordinator.persistedRevision,
+                                AppNoteSaveCoordinator.getRevision(note.uri.toString()),
+                                operationExpired = true
+                            )) showUnsavedRecoveryError(note, result.content) else showEditor(note, result.content)
+                    }
+                    AppNoteSaveCoordinator.NoteRecovery.None -> {
+                        val missingDirtySnapshot = EditorRecoveryPolicy.requiresExplicitError(
+                            restoredSaveCoordinatorNoteUri == note.uri.toString(),
+                            saveCoordinator.revision,
+                            saveCoordinator.persistedRevision,
+                            AppNoteSaveCoordinator.getRevision(note.uri.toString()),
+                            operationExpired = false
+                        )
+                        if (missingDirtySnapshot) showUnsavedRecoveryError(note, result.content) else showEditor(note, result.content)
+                    }
                 }
+                is NoteReadResult.Failure -> showNoteOpenError(
+                    note,
+                    result.kind,
+                    "原笔记未被修改"
+                ) { openNote(note) }
             }
         }
+    }
+
+    private fun showUnsavedRecoveryError(note: VaultDocument, savedContent: String) {
+        releaseEditor()
+        currentNote = note
+        screen = Screen.EDITOR_ERROR
+        val root = pageRoot(COLOR_EDITOR_BACKGROUND)
+        root.addView(simpleToolbar("‹  文件", note.name.removeSuffix(".md")) {
+            if (openedFromSearch) showSearch() else showVaultBrowser()
+        }, matchWrap())
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(36), dp(24), dp(24))
+            addView(infoBanner("未保存内容无法恢复。Vault 中已保存的版本仍保持不变，应用不会自动覆盖它。"), matchWrap())
+            addView(action("打开 Vault 中已保存版本", true) {
+                AppNoteSaveCoordinator.discardNoteRecovery(note.uri.toString())
+                restoredSaveCoordinatorNoteUri = null
+                saveCoordinator.reset(AppNoteSaveCoordinator.getRevision(note.uri.toString()))
+                showEditor(note, savedContent)
+            }, matchWrap().apply { topMargin = dp(16) })
+            addView(action("返回文件库", false) {
+                if (openedFromSearch) showSearch() else showVaultBrowser()
+            }, matchWrap().apply { topMargin = dp(8) })
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
+        setContentView(root)
     }
 
     private fun showNoteLoading(note: VaultDocument?, message: String) {
@@ -1941,7 +2198,25 @@ class MainActivity : Activity() {
 
     private fun showEditor(note: VaultDocument, content: String) {
         releaseEditor()
-        saveCoordinator.reset()
+        val noteUriString = note.uri.toString()
+        val coordinatorRev = AppNoteSaveCoordinator.getRevision(noteUriString)
+        if (restoredSaveCoordinatorNoteUri == noteUriString) {
+            // Recreating this note's editor from savedInstanceState (e.g. rotation).
+            // Preserve dirty or failed state if changes remain unpersisted.
+            val actualPersisted = maxOf(saveCoordinator.persistedRevision, coordinatorRev)
+            val actualCurrent = maxOf(saveCoordinator.revision, actualPersisted)
+            val wasFailed = (saveCoordinator.state == RevisionSaveCoordinator.State.FAILED)
+            val stillFailed = wasFailed && (coordinatorRev < actualCurrent)
+            saveCoordinator.restore(actualCurrent, actualPersisted, stillFailed)
+            if (saveCoordinator.hasUnsavedChanges && !wasFailed) {
+                handler.removeCallbacks(autosave)
+                handler.postDelayed(autosave, AUTOSAVE_DELAY_MS)
+            }
+        } else {
+            val baseRev = maxOf(saveCoordinator.revision, coordinatorRev)
+            saveCoordinator.reset(baseRev)
+        }
+        restoredSaveCoordinatorNoteUri = null
         saveWaiters.clear()
         screen = Screen.EDITOR
         val root = pageRoot(COLOR_EDITOR_BACKGROUND)
@@ -1994,7 +2269,7 @@ class MainActivity : Activity() {
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             webViewClient = attachmentClient()
-            addJavascriptInterface(EditorBridge(), "Android")
+            addJavascriptInterface(EditorBridge(editorGeneration), "Android")
         }
         webView = editor
         root.addView(editor, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -2195,11 +2470,28 @@ class MainActivity : Activity() {
         val generation = editorGeneration
         updateSaveStatus()
         editorReleaseCoordinator.onSerializationStarted(editor)
+        val operationId = AppNoteSaveCoordinator.beginSerialization(note.uri.toString(), request.revision) {
+            saveCoordinator.complete(request, false)
+            editorReleaseCoordinator.onSerializationCompleted(editor) { target ->
+                try { target.stopLoading(); target.destroy() } catch (_: Exception) {}
+            }
+            val pending = saveWaiters.toList()
+            saveWaiters.clear()
+            pending.forEach { it(false) }
+            if (!isFinishing && !isDestroyed && generation == editorGeneration) updateSaveStatus()
+        }
+        if (operationId.isBlank()) {
+            saveCoordinator.complete(request, false)
+            editorReleaseCoordinator.onSerializationCompleted(editor) { target -> target.destroy() }
+            updateSaveStatus()
+            return
+        }
         editor.evaluateJavascript("window.markbook && window.markbook.serialize ? window.markbook.serialize() : ''") { value ->
             try {
                 if (value != null) {
                     val content = decodeJavascriptString(value)
-                    AppNoteSaveCoordinator.submitSave(repository, note, content, request.revision) { success, refreshed ->
+                    if (!AppNoteSaveCoordinator.submitSnapshot(operationId, content)) return@evaluateJavascript
+                    AppNoteSaveCoordinator.submitSave(repository, note, content, request.revision, operationId) { success, refreshed ->
                         if (isFinishing || isDestroyed || generation != editorGeneration || screen != Screen.EDITOR) {
                             return@submitSave
                         }
@@ -2218,7 +2510,15 @@ class MainActivity : Activity() {
                             pending.forEach { it(true) }
                         }
                     }
+                } else {
+                    AppNoteSaveCoordinator.failSerialization(operationId)
+                    saveCoordinator.complete(request, false)
+                    updateSaveStatus()
                 }
+            } catch (t: Throwable) {
+                AppNoteSaveCoordinator.failSerialization(operationId)
+                saveCoordinator.complete(request, false)
+                throw t
             } finally {
                 editorReleaseCoordinator.onSerializationCompleted(editor) { target ->
                     try {
@@ -2286,16 +2586,53 @@ class MainActivity : Activity() {
 
     private fun capturePhotoContext(onReady: () -> Unit) {
         val editor = webView
-        if (editor == null) {
-            onReady()
+        val note = currentNote
+        photoContextScrollY = editor?.scrollY ?: 0
+        if (editor == null || note == null) {
+            if (note != null) {
+                noteIoExecutor.execute {
+                    val persisted = repository.readText(note)
+                    if (persisted == null) {
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) toast("无法读取笔记内容，已取消拍照")
+                        }
+                        return@execute
+                    }
+                    photoSavedBodyHash = repository.bodySha256(persisted)
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) onReady()
+                    }
+                }
+            } else {
+                onReady()
+            }
             return
         }
-        photoContextScrollY = editor.scrollY
         editor.evaluateJavascript(
             "window.markbook && window.markbook.serializeWithCaret ? window.markbook.serializeWithCaret() : ''"
         ) { value ->
             photoContextContent = decodeJavascriptString(value).ifBlank { null }
-            onReady()
+            val normOffset = photoContextContent
+                ?.indexOf(MarkdownCodec.CARET_MARKER)
+                ?.takeIf { it >= 0 } ?: 0
+            noteIoExecutor.execute {
+                val persisted = repository.readText(note)
+                if (persisted == null) {
+                    photoContextContent = null
+                    photoSavedBodyHash = null
+                    photoContextCaretOffset = 0
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) toast("无法读取笔记内容，已取消拍照")
+                    }
+                    return@execute
+                }
+                photoSavedBodyHash = repository.bodySha256(persisted)
+                val normalized = photoContextContent?.replace(MarkdownCodec.CARET_MARKER, "")
+                photoContextCaretOffset = PhotoCommitPolicy.safeInsertPoint(persisted, normOffset, normalized)
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) onReady()
+                }
+            }
         }
     }
 
@@ -2326,6 +2663,7 @@ class MainActivity : Activity() {
         if (resultCode != RESULT_OK) return
         if (requestCode == VAULT_REQUEST) {
             data?.data?.let {
+                AppNoteSaveCoordinator.clearVaultScopedState()
                 repository.rememberVault(it)
                 browserDirectory = null
                 browserPath.clear()
@@ -2385,7 +2723,7 @@ class MainActivity : Activity() {
                 return@saveCurrentNote
             }
             capturePhotoContext {
-                val markerOffset = photoContextContent?.indexOf(MarkdownCodec.CARET_MARKER)?.coerceAtLeast(0) ?: 0
+                val markerOffset = photoContextCaretOffset
                 noteIoExecutor.execute {
                     val persisted = repository.readText(note) ?: return@execute
                     val session = PendingVideoCaptureSession(
@@ -2571,6 +2909,7 @@ class MainActivity : Activity() {
                 runOnUiThread { showVideoFailure("无法更新笔记，视频缓存已保留，可重试") }
                 return@execute
             }
+            AppNoteSaveCoordinator.advanceRevision(note.uri.toString())
             repository.savePendingVideoCapture(attachmentSession.copy(stage = VIDEO_STAGE_NOTE_SAVED))
             val refreshed = repository.refreshDocument(note) ?: note
             val cleaned = repository.confirmVideoAttachment(attachment, cache)
@@ -2635,7 +2974,7 @@ class MainActivity : Activity() {
         }
         val view = PhotoEditorView(this, bitmap)
         editorView = view
-        header.addView(action("取消", false) { if (!photoSavePending) restoreEditorScreen() })
+        header.addView(action("取消", false) { restoreEditorScreen() })
         header.addView(TextView(this).apply {
             text = "调整照片"
             textSize = 18f
@@ -2682,49 +3021,146 @@ class MainActivity : Activity() {
         photoModeActions.forEach { it.isEnabled = false }
         photoStatusView?.text = "正在写入原图、校正图和笔记…"
         val transformRequest = view.freezeTransformRequest()
+        val expectedSavedBodyHash = photoSavedBodyHash
+        if (expectedSavedBodyHash.isNullOrBlank()) {
+            photoSavePending = false
+            photoInsertAction?.isEnabled = true
+            photoModeActions.forEach { it.isEnabled = true }
+            showPhotoSaveFailure("笔记基线已失效，请返回笔记后重新拍摄")
+            return
+        }
+        AppNoteSaveCoordinator.startPhotoSession(capture.absolutePath, note.uri.toString())
         AppNoteSaveCoordinator.executeMedia {
+            if (AppNoteSaveCoordinator.isPhotoSessionCancelled(capture.absolutePath)) {
+                if (!bitmap.isRecycled) bitmap.recycle()
+                return@executeMedia
+            }
             val corrected = try {
                 PhotoTransformer.transform(bitmap, transformRequest)
             } catch (_: Exception) {
+                AppNoteSaveCoordinator.completePhotoSession(
+                    capture.absolutePath,
+                    false,
+                    null,
+                    null,
+                    "无法处理照片，请调整后重试"
+                )
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     showPhotoSaveFailure("无法处理照片，请调整后重试")
                 }
                 return@executeMedia
             }
+            if (AppNoteSaveCoordinator.isPhotoSessionCancelled(capture.absolutePath)) {
+                if (!bitmap.isRecycled) bitmap.recycle()
+                return@executeMedia
+            }
             noteIoExecutor.execute {
+                if (!AppNoteSaveCoordinator.transitionPhotoSession(
+                        capture.absolutePath,
+                        AppNoteSaveCoordinator.PhotoPhase.PROCESSING,
+                        AppNoteSaveCoordinator.PhotoPhase.ATTACHMENTS_WRITING
+                    )) {
+                    if (!bitmap.isRecycled) bitmap.recycle()
+                    return@execute
+                }
                 val attachments = try {
                     FileInputStream(capture).use { repository.savePhotoPair(note, it, corrected) }
                 } catch (_: Exception) {
                     null
                 }
                 if (attachments == null) {
+                    AppNoteSaveCoordinator.completePhotoSession(
+                        capture.absolutePath,
+                        false,
+                        null,
+                        null,
+                        "照片尚未插入，请检查 Vault 权限或存储空间后重试"
+                    )
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         showPhotoSaveFailure("照片尚未插入，请检查 Vault 权限或存储空间后重试")
                     }
                     return@execute
                 }
+                if (!AppNoteSaveCoordinator.transitionPhotoSession(
+                        capture.absolutePath,
+                        AppNoteSaveCoordinator.PhotoPhase.ATTACHMENTS_WRITING,
+                        AppNoteSaveCoordinator.PhotoPhase.READY_TO_COMMIT
+                    )) {
+                    repository.rollbackPhotoPair(attachments)
+                    if (!bitmap.isRecycled) bitmap.recycle()
+                    return@execute
+                }
                 val relativePath = repository.relativeAttachmentPath(note, attachments)
                 val imageLink = "![${attachments.corrected}]($relativePath)"
-                val content = insertPhotoAtCapturePoint(
-                    photoContextContent ?: repository.readText(note).orEmpty(),
-                    imageLink
-                )
-                val success = repository.saveText(note, content)
-                if (success) {
-                    val refreshed = repository.refreshDocument(note) ?: note
-                    repository.confirmPhotoPair(attachments)
+                val savedBody = repository.readText(note)
+                if (savedBody == null) {
+                    repository.rollbackPhotoPair(attachments)
+                    val readErrorMsg = "无法读取笔记内容，照片未插入；请检查权限或存储后重试"
+                    AppNoteSaveCoordinator.completePhotoSession(
+                        capture.absolutePath, false, null, null,
+                        readErrorMsg
+                    )
                     runOnUiThread {
-                        if (isFinishing || isDestroyed) {
+                        if (!isFinishing && !isDestroyed) showPhotoSaveFailure(readErrorMsg)
+                    }
+                    return@execute
+                }
+                if (!PhotoCommitPolicy.canBeginCommit(expectedSavedBodyHash, savedBody)) {
+                    repository.rollbackPhotoPair(attachments)
+                    val changeMsg = "笔记已在外部更改，照片未插入；请返回笔记确认最新内容"
+                    AppNoteSaveCoordinator.completePhotoSession(
+                        capture.absolutePath, false, null, null,
+                        changeMsg
+                    )
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) showPhotoSaveFailure(changeMsg)
+                    }
+                    return@execute
+                }
+                val caret = PhotoCommitPolicy.adjustToSafeTokenBoundary(
+                    savedBody,
+                    photoContextCaretOffset.coerceIn(0, savedBody.length)
+                )
+                val originalContent = savedBody.substring(0, caret) +
+                    MarkdownCodec.CARET_MARKER +
+                    savedBody.substring(caret)
+                val content = insertPhotoAtCapturePoint(originalContent, imageLink)
+                if (!AppNoteSaveCoordinator.transitionPhotoSession(
+                        capture.absolutePath,
+                        AppNoteSaveCoordinator.PhotoPhase.READY_TO_COMMIT,
+                        AppNoteSaveCoordinator.PhotoPhase.COMMITTING
+                    )) {
+                    repository.rollbackPhotoPair(attachments)
+                    if (!bitmap.isRecycled) bitmap.recycle()
+                    return@execute
+                }
+                repository.saveText(note, content)
+                val committedNote = repository.refreshDocument(note)
+                val committedBody = committedNote?.let(repository::readText)
+                when (PhotoCommitPolicy.afterSave(committedBody, imageLink)) {
+                PhotoPostSaveAction.CONFIRM -> {
+                    AppNoteSaveCoordinator.advanceRevision(note.uri.toString())
+                    val refreshed = checkNotNull(committedNote)
+                    repository.confirmPhotoPair(attachments)
+                    AppNoteSaveCoordinator.completePhotoSession(
+                        capture.absolutePath,
+                        true,
+                        refreshed,
+                        relativePath
+                    )
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || AppNoteSaveCoordinator.isPhotoSessionCancelled(capture.absolutePath)) {
                             if (!bitmap.isRecycled) bitmap.recycle()
-                            discardCaptureFile()
                             return@runOnUiThread
                         }
                         currentNote = refreshed
                         pendingEditorScrollY = photoContextScrollY
                         pendingCaretImagePath = relativePath
                         photoContextContent = null
+                        photoSavedBodyHash = null
+                        photoContextCaretOffset = 0
                         if (!bitmap.isRecycled) bitmap.recycle()
                         discardCaptureFile()
                         editorView = null
@@ -2735,28 +3171,60 @@ class MainActivity : Activity() {
                         showEditor(refreshed, content)
                         showEditorStatus("照片已插入并保存")
                     }
-                } else {
+                }
+                PhotoPostSaveAction.ROLLBACK -> {
                     repository.rollbackPhotoPair(attachments)
+                    AppNoteSaveCoordinator.completePhotoSession(
+                        capture.absolutePath,
+                        false,
+                        null,
+                        null,
+                        "无法更新笔记，照片尚未插入；可重试或返回笔记"
+                    )
                     runOnUiThread {
                         if (isFinishing || isDestroyed) {
                             if (!bitmap.isRecycled) bitmap.recycle()
-                            discardCaptureFile()
                             return@runOnUiThread
                         }
                         showPhotoSaveFailure("无法更新笔记，照片尚未插入；可重试或返回笔记")
                     }
+                }
+                PhotoPostSaveAction.RETAIN_FOR_RECOVERY -> {
+                    AppNoteSaveCoordinator.requirePhotoRecovery(
+                        capture.absolutePath,
+                        "无法确认笔记写入结果；已保留照片事务，请重新打开 Vault 后检查"
+                    )
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) showPhotoSaveFailure(
+                            "无法确认笔记写入结果；已保留照片事务，请重新打开 Vault 后检查"
+                        )
+                    }
+                }
                 }
             }
         }
     }
 
     private fun restoreEditorScreen() {
-        if (photoSavePending) return
+        if (photoSavePending) {
+            val cancel = captureFile?.let { AppNoteSaveCoordinator.requestPhotoCancel(it.absolutePath) }
+            if (cancel != AppNoteSaveCoordinator.PhotoCancelResult.ACCEPTED) {
+                photoStatusView?.text = if (cancel == AppNoteSaveCoordinator.PhotoCancelResult.TOO_LATE) {
+                    "照片已开始提交，无法取消；正在确认写入结果…"
+                } else {
+                    "照片事务已经结束，正在确认结果…"
+                }
+                return
+            }
+            photoSavePending = false
+        }
         discardCaptureFile()
         editorView = null
         pendingEditorScrollY = photoContextScrollY
         val restoredContent = photoContextContent?.replace(MarkdownCodec.CARET_MARKER, "")
         photoContextContent = null
+        photoSavedBodyHash = null
+        photoContextCaretOffset = 0
         photoStatusView = null
         photoInsertAction = null
         photoModeActions = emptyList()
@@ -2795,13 +3263,13 @@ class MainActivity : Activity() {
         photoStatusView?.text = message
     }
 
-    private fun insertPhotoAtCapturePoint(base: String, imageLink: String): String {
-        val insertion = "\n\n$imageLink\n\n"
-        return if (base.contains(MarkdownCodec.CARET_MARKER)) {
-            base.replace(MarkdownCodec.CARET_MARKER, insertion).trimEnd() + "\n"
-        } else {
-            base.trimEnd() + insertion
-        }
+    private fun insertPhotoAtCapturePoint(base: String, imageLink: String): String =
+        PhotoCommitPolicy.insertPhotoAtCapturePoint(base, imageLink)
+
+    private fun removePhotoLink(content: String, imageLink: String): String {
+        return content.replace("\n\n$imageLink\n\n", "\n\n")
+            .replace("\n$imageLink\n", "\n")
+            .replace(imageLink, "")
     }
 
     private fun attachmentClient(): WebViewClient = object : WebViewClient() {
@@ -2853,11 +3321,11 @@ class MainActivity : Activity() {
         }
     }
 
-    private inner class EditorBridge {
+    private inner class EditorBridge(private val generation: Long) {
         @JavascriptInterface
         fun onChanged() {
             handler.post {
-                if (screen != Screen.EDITOR) return@post
+                if (screen != Screen.EDITOR || generation != editorGeneration) return@post
                 saveCoordinator.markEdited()
                 updateSaveStatus()
                 handler.removeCallbacks(autosave)
@@ -2868,7 +3336,7 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun onFormatState(value: String) {
             handler.post {
-                if (screen != Screen.EDITOR) return@post
+                if (screen != Screen.EDITOR || generation != editorGeneration) return@post
                 val state = runCatching { org.json.JSONObject(value) }.getOrNull() ?: return@post
                 updateFormatActionState("undo", false, state.optBoolean("undo"))
                 updateFormatActionState("redo", false, state.optBoolean("redo"))
@@ -3312,9 +3780,14 @@ class MainActivity : Activity() {
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
     private fun discardCaptureFile() {
-        captureFile?.delete()
+        captureFile?.let { file ->
+            AppNoteSaveCoordinator.clearPhotoSession(file.absolutePath)
+            file.delete()
+        }
         captureFile = null
         captureUri = null
+        photoSavedBodyHash = null
+        photoContextCaretOffset = 0
     }
 
     private fun pageRoot(color: Int): LinearLayout = LinearLayout(this).apply {

@@ -6,10 +6,60 @@ import java.net.URLDecoder
 object NoteBundleMovePolicy {
     enum class ReferenceStatus { NONE, REFERENCES_BUNDLE, AMBIGUOUS }
 
+    sealed class ResolvedSourceBundle {
+        data class Found(val bundlePath: String) : ResolvedSourceBundle()
+        object None : ResolvedSourceBundle()
+        object AmbiguousReference : ResolvedSourceBundle()
+        object MultipleReferencedBundles : ResolvedSourceBundle()
+    }
+
     fun bundlePath(noteRelativePath: String): String = join(noteRelativePath.substringBeforeLast('/', ""), "assets/${noteRelativePath.substringAfterLast('/').removeSuffix(".md")}")
     fun legacyBundlePath(noteRelativePath: String): String = "assets/${noteRelativePath.substringAfterLast('/').removeSuffix(".md")}"
 
+    fun resolveSourceBundle(
+        noteRelativePath: String,
+        markdown: String,
+        colocatedExists: Boolean,
+        legacyExists: Boolean
+    ): ResolvedSourceBundle {
+        val colocated = bundlePath(noteRelativePath)
+        val legacy = legacyBundlePath(noteRelativePath)
+        val noteParent = noteRelativePath.substringBeforeLast('/', "")
+
+        if (colocated == legacy) {
+            if (!colocatedExists) return ResolvedSourceBundle.None
+            return when (referenceStatus(markdown, noteParent, colocated)) {
+                ReferenceStatus.AMBIGUOUS -> ResolvedSourceBundle.AmbiguousReference
+                else -> ResolvedSourceBundle.Found(colocated)
+            }
+        }
+
+        val colocatedRef = referenceStatus(markdown, noteParent, colocated)
+        val legacyRef = referenceStatus(markdown, noteParent, legacy)
+
+        if (colocatedRef == ReferenceStatus.AMBIGUOUS || legacyRef == ReferenceStatus.AMBIGUOUS) {
+            return ResolvedSourceBundle.AmbiguousReference
+        }
+
+        val colocatedReferenced = colocatedExists && colocatedRef == ReferenceStatus.REFERENCES_BUNDLE
+        val legacyReferenced = legacyExists && legacyRef == ReferenceStatus.REFERENCES_BUNDLE
+
+        return when {
+            colocatedReferenced && legacyReferenced ->
+                ResolvedSourceBundle.MultipleReferencedBundles
+            colocatedReferenced ->
+                ResolvedSourceBundle.Found(colocated)
+            legacyReferenced ->
+                ResolvedSourceBundle.Found(legacy)
+            colocatedExists ->
+                ResolvedSourceBundle.Found(colocated)
+            else ->
+                ResolvedSourceBundle.None
+        }
+    }
+
     fun referenceStatus(markdown: String, noteParent: String, bundlePath: String): ReferenceStatus {
+        if (bundlePath.isBlank()) return ReferenceStatus.NONE
         var found = false
         destinations(markdown).forEach { destination ->
             when (belongsToBundle(destination, noteParent, bundlePath)) {
@@ -27,7 +77,7 @@ object NoteBundleMovePolicy {
     }
 
     fun isBundleReference(markdown: String, noteParent: String, bundlePath: String): Boolean =
-        referenceStatus(markdown, noteParent, bundlePath) != ReferenceStatus.NONE
+        bundlePath.isNotBlank() && referenceStatus(markdown, noteParent, bundlePath) != ReferenceStatus.NONE
 
     fun rewriteBundleReferences(markdown: String, sourceParent: String, destinationParent: String, sourceBundle: String, destinationBundle: String): String {
         if (referenceStatus(markdown, sourceParent, sourceBundle) == ReferenceStatus.AMBIGUOUS) throw IllegalArgumentException("Ambiguous attachment reference")

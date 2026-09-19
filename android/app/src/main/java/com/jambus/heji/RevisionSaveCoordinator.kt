@@ -41,9 +41,9 @@ class RevisionSaveCoordinator {
             else -> State.DIRTY
         }
 
-    fun reset() {
-        currentRevision = 0L
-        savedRevision = 0L
+    fun reset(initialRevision: Long = 0L) {
+        currentRevision = initialRevision
+        savedRevision = initialRevision
         inFlightRevision = null
         lastAttemptFailed = false
     }
@@ -77,4 +77,22 @@ class RevisionSaveCoordinator {
         }
         return state
     }
+
+    fun restore(current: Long, saved: Long, failed: Boolean = false) {
+        currentRevision = current
+        savedRevision = saved
+        inFlightRevision = null
+        lastAttemptFailed = failed
+    }
+}
+
+object EditorRecoveryPolicy {
+    fun requiresExplicitError(
+        restoredNoteMatches: Boolean,
+        dirtyRevision: Long,
+        savedRevision: Long,
+        processRevision: Long,
+        operationExpired: Boolean
+    ): Boolean = operationExpired ||
+        (restoredNoteMatches && dirtyRevision > maxOf(savedRevision, processRevision))
 }

@@ -50,6 +50,14 @@ flowchart TD
 
 任一步失败都不能产生“正文已引用、图片不存在”的状态。根据事务标记恢复或清理临时文件；不得删除已完成的内容。处理后的图片是默认可见版本，原图仍在 Vault 中可追溯。
 
+照片事务按 `PROCESSING → ATTACHMENTS_WRITING → READY_TO_COMMIT → COMMITTING →
+COMMITTED | FAILED | RECOVERY_REQUIRED` 推进。取消仅能在进入 `COMMITTING` 前原子转入
+`CANCELLED`；已进入提交临界区时返回“已开始提交，无法取消”，界面继续等待真实结果，不得假装
+已返回且正文未变。进入流程时记录已保存正文 SHA-256，进入 `COMMITTING` 前重读并比较；不一致
+则停止提交且不覆盖外部变化。正文保存后必须保守复核：确认链接存在才确认附件，确认链接不存在才
+回滚附件；读取失败或结果不确定时保留 marker 与附件并进入 `RECOVERY_REQUIRED`。提交后禁止通过
+第二次正文写入补偿取消，链接状态不确定时禁止删除附件。
+
 ## 4. 状态、失败与恢复
 
 | 情况 | 用户看到的反馈 | 系统处理 |
