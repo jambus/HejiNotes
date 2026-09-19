@@ -20,6 +20,8 @@ object UiText {
         "移到回收站" to "Move to Trash", "移动到…" to "Move to…", "移动" to "Move",
         "拍摄" to "Capture", "拍照" to "Take photo", "录视频" to "Record video", "插入照片" to "Insert photo",
         "插入视频" to "Insert video", "重新录制" to "Record again", "确认视频" to "Confirm video",
+        "图片操作" to "Image actions", "视频操作" to "Video actions", "从正文删除" to "Remove from note",
+        "只会删除正文中的引用，Vault 内的附件文件会保留。" to "Only the reference in this note will be removed. The attachment file remains in the Vault.",
         "调整照片" to "Adjust photo", "矩形裁剪" to "Rectangle crop", "四点校正" to "Perspective correction",
         "撤销" to "Undo", "重做" to "Redo", "加粗" to "Bold", "斜体" to "Italic", "添加标签" to "Add tag",
         "添加链接" to "Add link", "插入表格" to "Insert table", "标题格式" to "Heading format",

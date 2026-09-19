@@ -3392,6 +3392,26 @@ class MainActivity : Activity() {
                 openAttachmentInSystemPlayer(resolved)
             }
         }
+
+        @JavascriptInterface
+        fun openMediaActions(kind: String) {
+            handler.post {
+                if (screen != Screen.EDITOR || generation != editorGeneration) return@post
+                showMediaActions(kind)
+            }
+        }
+    }
+
+    private fun showMediaActions(kind: String) {
+        val title = if (kind == "video") ui("视频操作") else ui("图片操作")
+        AlertDialog.Builder(dialogContext())
+            .setTitle(title)
+            .setMessage(ui("只会删除正文中的引用，Vault 内的附件文件会保留。"))
+            .setNegativeButton(ui("取消"), null)
+            .setPositiveButton(ui("从正文删除")) { _, _ ->
+                webView?.evaluateJavascript("window.markbook && window.markbook.removePendingMedia()", null)
+            }
+            .show()
     }
 
     private fun openAttachmentInSystemPlayer(relativePath: String) {

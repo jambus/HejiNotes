@@ -230,6 +230,50 @@ object MarkdownCodec {
               }
               var editor = document.getElementById('editor');
               var lastRange = null;
+              var pendingMedia = null;
+              function mediaNode(node) {
+                while (node && node !== editor) {
+                  if (node.nodeType === Node.ELEMENT_NODE && node.tagName.toLowerCase() === 'img' && node.hasAttribute('data-markdown')) return node;
+                  if (node.nodeType === Node.ELEMENT_NODE && node.getAttribute('data-markbook-video') === 'true') return node;
+                  node = node.parentNode;
+                }
+                return null;
+              }
+              function mediaBlock(node) {
+                var parent = node ? node.parentNode : null;
+                return parent && (parent.tagName.toLowerCase() === 'p' || parent.tagName.toLowerCase() === 'div') ? parent : node;
+              }
+              function ensureTrailingMediaLine() {
+                var last = editor.lastElementChild;
+                if (!last || (last.tagName.toLowerCase() !== 'p' && last.tagName.toLowerCase() !== 'div')) return null;
+                var media = last.children.length === 1 ? mediaNode(last.firstElementChild) : null;
+                if (!media || mediaBlock(media) !== last) return null;
+                var tail = document.createElement('p');
+                tail.className = 'markbook-media-tail';
+                tail.innerHTML = '<br>';
+                editor.appendChild(tail);
+                return tail;
+              }
+              function placeCaretAfterMedia(node) {
+                var block = mediaBlock(node), target = null;
+                if (block && block !== node && block.children.length === 1) {
+                  target = block.nextElementSibling;
+                  if (!target) {
+                    target = document.createElement('p');
+                    target.className = 'markbook-media-tail';
+                    target.innerHTML = '<br>';
+                    block.parentNode.insertBefore(target, block.nextSibling);
+                  }
+                }
+                var range = document.createRange(), selection = window.getSelection();
+                if (target) {
+                  range.selectNodeContents(target); range.collapse(true);
+                } else {
+                  range.setStartAfter(node); range.collapse(true);
+                }
+                selection.removeAllRanges(); selection.addRange(range); editor.focus();
+                lastRange = range.cloneRange();
+              }
               function selectionBelongsToEditor(selection) {
                 return !!(selection && selection.rangeCount &&
                   editor.contains(selection.getRangeAt(0).commonAncestorContainer));
@@ -341,6 +385,22 @@ object MarkdownCodec {
                   }
                   return false;
                 },
+                removePendingMedia: function() {
+                  var node = pendingMedia;
+                  pendingMedia = null;
+                  if (!node || !editor.contains(node)) return false;
+                  var block = mediaBlock(node);
+                  node.remove();
+                  if (block && block !== node && !block.querySelector('img[data-markdown],[data-markbook-video="true"]') && !text(block).trim()) {
+                    block.innerHTML = '<br>';
+                    var range = document.createRange(), selection = window.getSelection();
+                    range.selectNodeContents(block); range.collapse(true);
+                    selection.removeAllRanges(); selection.addRange(range); editor.focus();
+                    lastRange = range.cloneRange();
+                  }
+                  notifyChange();
+                  return true;
+                },
                 applyFormat: applyFormat
               };
               document.addEventListener('selectionchange', function() { rememberSelection(); notifyFormatState(); });
@@ -353,6 +413,13 @@ object MarkdownCodec {
                 if (plain) document.execCommand('insertText', false, plain);
               });
               editor.addEventListener('input', function() { notifyChange(); });
+              editor.addEventListener('contextmenu', function(event) {
+                var media = mediaNode(event.target);
+                if (!media || !window.Android || !window.Android.openMediaActions) return;
+                event.preventDefault();
+                pendingMedia = media;
+                Android.openMediaActions(media.getAttribute('data-markbook-video') === 'true' ? 'video' : 'image');
+              });
               editor.addEventListener('click', function(event) {
                 var node = event.target;
                 if (node && node.classList && node.classList.contains('markbook-video-play')) {
@@ -364,6 +431,11 @@ object MarkdownCodec {
                     video.play();
                     return;
                   }
+                }
+                var media = mediaNode(node);
+                if (media && (!node.tagName || node.tagName.toLowerCase() !== 'video')) {
+                  placeCaretAfterMedia(media);
+                  return;
                 }
                 if (!node || node.tagName.toLowerCase() !== 'a') return;
                 var href = node.getAttribute('href') || '';
@@ -380,6 +452,7 @@ object MarkdownCodec {
                   media.addEventListener('ended', function() { card.classList.remove('is-playing'); });
                 })(videos[v]);
               }
+              ensureTrailingMediaLine();
               setTimeout(notifyFormatState, 0);
             })();
             </script></html>
