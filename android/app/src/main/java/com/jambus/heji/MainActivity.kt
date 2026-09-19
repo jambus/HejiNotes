@@ -2304,6 +2304,7 @@ class MainActivity : Activity() {
             settings.domStorageEnabled = true
             settings.allowFileAccess = false
             settings.allowContentAccess = false
+            settings.mediaPlaybackRequiresUserGesture = true
             webViewClient = attachmentClient()
             addJavascriptInterface(EditorBridge(editorGeneration), "Android")
         }
@@ -3342,6 +3343,8 @@ class MainActivity : Activity() {
             val mime = when {
                 path.endsWith(".png", true) -> "image/png"
                 path.endsWith(".webp", true) -> "image/webp"
+                path.endsWith(".mp4", true) -> "video/mp4"
+                path.endsWith(".3gp", true) -> "video/3gpp"
                 else -> "image/jpeg"
             }
             return WebResourceResponse(mime, null, stream)

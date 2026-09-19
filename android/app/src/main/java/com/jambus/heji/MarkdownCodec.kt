@@ -188,7 +188,7 @@ object MarkdownCodec {
             <!doctype html>
             <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
             <style>body{margin:0;background:$background} #editor{box-sizing:border-box;max-width:760px;min-height:100vh;margin:0 auto;padding:20px 20px 64px;font-family:sans-serif;font-size:1.125rem;line-height:1.68;color:$text;caret-color:$caret;outline:none}
-            img{display:block;max-width:100%;height:auto;margin:1em 0;border-radius:10px} .markbook-inserted{outline:3px solid $caret;outline-offset:3px;border-radius:10px} h1,h2,h3,h4,h5{font-weight:700;line-height:1.24;color:$heading} h1{font-size:1.72em;margin:.35em 0 .7em} h2{font-size:1.32em;margin:1.65em 0 .58em} h3{font-size:1.15em;margin:1.45em 0 .48em} h4{font-size:1.02em;margin:1.28em 0 .4em} h5{font-size:.92em;margin:1.15em 0 .35em} p{margin:.72em 0} ul{margin:.7em 0;padding-left:1.4em} li{margin:.28em 0} a{color:$link;text-decoration:underline;text-decoration-thickness:.09em;text-underline-offset:.13em} strong{font-weight:700} em{font-style:italic}
+            img{display:block;max-width:100%;height:auto;margin:1em 0;border-radius:10px} .markbook-video{display:block;position:relative;max-width:100%;margin:1em 0;border-radius:10px;overflow:hidden;background:#000;color:#fff;line-height:1.25} .markbook-video video{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#000} .markbook-video-play{position:absolute;left:50%;top:50%;width:64px;height:64px;transform:translate(-50%,-50%);border:0;border-radius:50%;background:rgba(24,32,28,.82);color:#fff;font-size:30px;line-height:64px;text-align:center;padding:0 0 0 4px} .markbook-video.is-started .markbook-video-play,.markbook-video.is-playing .markbook-video-caption{display:none} .markbook-video-caption{display:block;position:absolute;left:0;right:0;bottom:0;padding:24px 12px 9px;background:linear-gradient(transparent,rgba(0,0,0,.76));font-size:.82em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none} .markbook-inserted{outline:3px solid $caret;outline-offset:3px;border-radius:10px} h1,h2,h3,h4,h5{font-weight:700;line-height:1.24;color:$heading} h1{font-size:1.72em;margin:.35em 0 .7em} h2{font-size:1.32em;margin:1.65em 0 .58em} h3{font-size:1.15em;margin:1.45em 0 .48em} h4{font-size:1.02em;margin:1.28em 0 .4em} h5{font-size:.92em;margin:1.15em 0 .35em} p{margin:.72em 0} ul{margin:.7em 0;padding-left:1.4em} li{margin:.28em 0} a{color:$link;text-decoration:underline;text-decoration-thickness:.09em;text-underline-offset:.13em} strong{font-weight:700} em{font-style:italic}
             pre.markbook-raw{margin:1em 0;padding:11px 12px;border-left:3px solid $rawBorder;border-radius:8px;background:$rawBackground;color:$rawText;font-family:monospace;font-size:.9em;line-height:1.55;white-space:pre-wrap;word-break:break-word;user-select:text}</style></head>
             <body><div id="editor" contenteditable="true" spellcheck="true">$body</div></body>
             <script>
@@ -208,6 +208,10 @@ object MarkdownCodec {
                   return RAW_OPEN + (rawBlocks.length - 1) + RAW_CLOSE + '\n';
                 }
                 if (tag === 'img') return '!['+(node.getAttribute('alt')||'image')+']('+(node.getAttribute('data-markdown')||'')+')';
+                if (tag === 'span' && node.getAttribute('data-markbook-video') === 'true') {
+                  return '[' + (node.getAttribute('data-markbook-label') || '视频') + '](' +
+                    linkDestination(node.getAttribute('data-markdown') || '') + ')';
+                }
                 if (tag === 'span' && node.getAttribute('data-markbook-caret') === 'true') return '$CARET_MARKER';
                 for (var i = 0; i < node.childNodes.length; i++) out += md(node.childNodes[i]);
                 if (tag === 'h1') return '# ' + out.trim() + '\n';
@@ -321,9 +325,10 @@ object MarkdownCodec {
                   return false;
                 },
                 focusAfterLink: function(path) {
-                  var links = editor.querySelectorAll('a[href]');
+                  var links = editor.querySelectorAll('a[href],[data-markbook-video="true"]');
                   for (var i = 0; i < links.length; i++) {
-                    if (links[i].getAttribute('href') !== path) continue;
+                    var targetPath = links[i].getAttribute('data-markdown') || links[i].getAttribute('href');
+                    if (targetPath !== path) continue;
                     var range = document.createRange(), selection = window.getSelection();
                     range.setStartAfter(links[i]); range.collapse(true);
                     selection.removeAllRanges(); selection.addRange(range); editor.focus();
@@ -350,11 +355,31 @@ object MarkdownCodec {
               editor.addEventListener('input', function() { notifyChange(); });
               editor.addEventListener('click', function(event) {
                 var node = event.target;
+                if (node && node.classList && node.classList.contains('markbook-video-play')) {
+                  var card = node.parentNode, video = card ? card.querySelector('video') : null;
+                  if (video) {
+                    event.preventDefault();
+                    video.controls = true;
+                    card.classList.add('is-started');
+                    video.play();
+                    return;
+                  }
+                }
                 if (!node || node.tagName.toLowerCase() !== 'a') return;
                 var href = node.getAttribute('href') || '';
                 if (/^https?:/i.test(href) || !window.Android || !window.Android.openAttachment) return;
                 event.preventDefault(); Android.openAttachment(href);
               });
+              var videos = editor.querySelectorAll('[data-markbook-video="true"]');
+              for (var v = 0; v < videos.length; v++) {
+                (function(card) {
+                  var media = card.querySelector('video');
+                  if (!media) return;
+                  media.addEventListener('play', function() { card.classList.add('is-playing'); });
+                  media.addEventListener('pause', function() { card.classList.remove('is-playing'); });
+                  media.addEventListener('ended', function() { card.classList.remove('is-playing'); });
+                })(videos[v]);
+              }
               setTimeout(notifyFormatState, 0);
             })();
             </script></html>
@@ -366,7 +391,7 @@ object MarkdownCodec {
         val out = StringBuilder()
         var last = 0
         while (matcher.find()) {
-            out.append(inlineText(value.substring(last, matcher.start())))
+            out.append(inlineText(value.substring(last, matcher.start()), attachmentUrl))
             val alt = matcher.group(1).orEmpty()
             val path = matcher.group(2).orEmpty()
             out.append("<img alt=\"").append(escapeAttribute(alt))
@@ -374,23 +399,42 @@ object MarkdownCodec {
                 .append("\" src=\"").append(escapeAttribute(attachmentUrl(path))).append("\">")
             last = matcher.end()
         }
-        out.append(inlineText(value.substring(last)))
+        out.append(inlineText(value.substring(last), attachmentUrl))
         return out.toString()
     }
 
     /** Parses Markdown links before HTML escaping so `<path with spaces>` remains a link. */
-    private fun inlineText(value: String): String {
+    private fun inlineText(value: String, attachmentUrl: (String) -> String): String {
         val out = StringBuilder()
         var last = 0
         for (match in LINK_PATTERN.findAll(value)) {
             out.append(emphasize(escapeHtml(value.substring(last, match.range.first))))
             val destination = match.groupValues[2].ifEmpty { match.groupValues[3] }
-            out.append("<a href=\"").append(escapeAttribute(destination)).append("\">")
-                .append(emphasize(escapeHtml(match.groupValues[1]))).append("</a>")
+            val label = match.groupValues[1]
+            if (isLocalVideo(destination)) {
+                out.append("<span class=\"markbook-video\" contenteditable=\"false\" data-markbook-video=\"true\"")
+                    .append(" data-markbook-label=\"").append(escapeAttribute(label))
+                    .append("\" data-markdown=\"").append(escapeAttribute(destination)).append("\">")
+                    .append("<video playsinline preload=\"metadata\" src=\"")
+                    .append(escapeAttribute(attachmentUrl(destination))).append("\" aria-label=\"")
+                    .append(escapeAttribute(label)).append("\"></video>")
+                    .append("<button type=\"button\" class=\"markbook-video-play\" aria-label=\"播放 ")
+                    .append(escapeAttribute(label)).append("\">&#9654;</button>")
+                    .append("<span class=\"markbook-video-caption\">").append(escapeHtml(label)).append("</span></span>")
+            } else {
+                out.append("<a href=\"").append(escapeAttribute(destination)).append("\">")
+                    .append(emphasize(escapeHtml(label))).append("</a>")
+            }
             last = match.range.last + 1
         }
         out.append(emphasize(escapeHtml(value.substring(last))))
         return out.toString()
+    }
+
+    private fun isLocalVideo(destination: String): Boolean {
+        if (Regex("^[A-Za-z][A-Za-z0-9+.-]*:").containsMatchIn(destination)) return false
+        val path = destination.substringBefore('?').substringBefore('#')
+        return path.endsWith(".mp4", ignoreCase = true) || path.endsWith(".3gp", ignoreCase = true)
     }
 
     private fun emphasize(escaped: String): String = escaped

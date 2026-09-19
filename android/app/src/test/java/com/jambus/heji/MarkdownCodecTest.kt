@@ -130,11 +130,16 @@ class MarkdownCodecTest {
     }
 
     @Test
-    fun linkWithAngleBracketsAndSpacesStaysClickable() {
-        assertEquals(
-            "<p><a href=\"../assets/会议 记录/120000-ab12-v.mp4\">视频 00:00:05</a></p>",
-            render("[视频 00:00:05](<../assets/会议 记录/120000-ab12-v.mp4>)\n")
-        )
+    fun localVideoLinkRendersAsInlinePlayableCard() {
+        val path = "../assets/会议 记录/120000-ab12-v.mp4"
+        val html = render("[视频 00:00:05](<$path>)\n")
+        assertTrue(html.contains("data-markbook-video=\"true\""))
+        assertTrue(html.contains("data-markbook-label=\"视频 00:00:05\""))
+        assertTrue(html.contains("data-markdown=\"$path\""))
+        assertTrue(html.contains("src=\"markbook://attachment/$path\""))
+        assertTrue(html.contains("<video playsinline preload=\"metadata\""))
+        assertTrue(!html.contains("<video controls"))
+        assertTrue(html.contains("class=\"markbook-video-play\""))
     }
 
     @Test
@@ -142,9 +147,20 @@ class MarkdownCodecTest {
         val destination = "../assets/会议 记录/120000-ab12-v (final).mp4"
         val markdown = MarkdownCodec.serializeLink("视频 00:00:05", destination)
         assertEquals("[视频 00:00:05](<$destination>)", markdown)
+        val html = render(markdown + "\n")
+        assertTrue(html.contains("data-markdown=\"$destination\""))
+        assertTrue(html.contains("data-markbook-label=\"视频 00:00:05\""))
+    }
+
+    @Test
+    fun externalVideoUrlAndNonVideoAttachmentRemainLinks() {
         assertEquals(
-            "<p><a href=\"$destination\">视频 00:00:05</a></p>",
-            render(markdown + "\n")
+            "<p><a href=\"https://example.com/movie.mp4\">remote</a></p>",
+            render("[remote](https://example.com/movie.mp4)\n")
+        )
+        assertEquals(
+            "<p><a href=\"../assets/manual.pdf\">manual</a></p>",
+            render("[manual](../assets/manual.pdf)\n")
         )
     }
 
@@ -167,6 +183,10 @@ class MarkdownCodecTest {
         val night = MarkdownCodec.toHtml("# 标题\n\n[链接](https://obsidian.md)\n", attachmentUrl, true)
 
         assertTrue(day.contains("text-decoration:underline"))
+        assertTrue(day.contains(".markbook-video video"))
+        assertTrue(day.contains("aspect-ratio:16/9"))
+        assertTrue(day.contains("video.controls = true"))
+        assertTrue(day.contains("is-started"))
         assertTrue(day.contains("<h1>标题</h1>"))
         assertTrue(day.contains("<a href=\"https://obsidian.md\">链接</a>"))
         assertTrue(night.contains("#a7e7c1"))
