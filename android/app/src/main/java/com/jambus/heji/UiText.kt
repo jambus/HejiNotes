@@ -8,7 +8,9 @@ import android.content.Context
  */
 object UiText {
     private val english = mapOf(
-        "设置" to "Settings", "切换 Vault" to "Switch Vault", "文件" to "Files", "搜索笔记" to "Search notes",
+        "设置" to "Settings", "切换 Vault" to "Switch Vault", "文件" to "Files", "文件夹" to "Folders", "笔记" to "Notes",
+        "图片" to "Image", "视频" to "Video", "其他文件" to "Other files", "只读附件目录" to "Read-only attachments",
+        "搜索笔记" to "Search notes",
         "‹  文件" to "‹  Files", "‹  设置" to "‹  Settings", "‹  回收站" to "‹  Trash", "‹  上一级" to "‹  Up",
         "更多选项" to "More options", "新建" to "New", "打开今日笔记" to "Open today’s note",
         "取消" to "Cancel", "保存" to "Save", "重试" to "Retry", "重新选择 Vault" to "Choose Vault again",
@@ -37,7 +39,9 @@ object UiText {
         "深色工作区与深色编辑纸面" to "Dark workspace and editor surface", "已启用  ✓" to "Enabled  ✓",
         "提示：左滑条目可重命名或移到回收站；长按也可操作。" to "Tip: swipe an item to rename or move it to Trash; long press also opens actions.",
         "左滑条目可重命名或移到回收站；长按也可操作" to "Swipe an item to rename or move it to Trash; long press also opens actions.",
-        "设置不会移动已有笔记或附件。新建的每日笔记会按 yyyy-MM-dd.md 写入所选目录。" to "Settings do not move existing notes or attachments. New daily notes are written as yyyy-MM-dd.md in the selected folder."
+        "设置不会移动已有笔记或附件。新建的每日笔记会按 yyyy-MM-dd.md 写入所选目录。" to "Settings do not move existing notes or attachments. New daily notes are written as yyyy-MM-dd.md in the selected folder.",
+        "当前目录没有其他文件" to "No other files in this folder",
+        "无法打开此文件，请安装支持该格式的查看器。" to "This file cannot be opened. Install an app that supports this format."
     )
 
     fun label(context: Context, source: String): String =

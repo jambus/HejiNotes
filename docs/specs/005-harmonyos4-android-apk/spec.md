@@ -4,14 +4,14 @@
 **Priority**: P1
 **Depends on**: 001-local-markdown-notebook, 002-camera-attachments,
 004-harmony-4-5-compatibility
-**Current Baseline**: Android APK `0.5.1` development (`versionCode 10`)
+**Current Baseline**: Android APK `0.5.2` development (`versionCode 11`)
 
 ## Goal
 
 为运行 HarmonyOS 4 的 Mate 60 提供可直接安装的 Android APK，优先完成本地
 Obsidian Vault 编辑和拍照记录闭环。
 
-当前 Android 开发基线为 `0.5.1`；历史版本范围、验证状态和后续版本管理规则见
+当前 Android 开发基线为 `0.5.2`；历史版本范围、验证状态和后续版本管理规则见
 [`docs/RELEASE_NOTES.md`](../../RELEASE_NOTES.md)。完成 FR-501、FR-507、FR-508 对应的
 Mate 60 真机验收前，该版本不得标记为候选或正式发布。
 
@@ -108,6 +108,9 @@ Mate 60 真机验收前，该版本不得标记为候选或正式发布。
 - **FR-531** 在独立兼容性迁移完成后，Android APK 必须以 `targetSdk 34` 发布，并使用受构建
   工具链支持的 Java/Kotlin 目标版本；迁移逐项验证存储访问、相机 URI、前台后台服务、通知、
   WebView 和 HarmonyOS 4 兼容层行为。
+- **FR-532** Android 主文件库必须显示 Vault 的 `assets` / `attachments` 目录及其中图片、
+  视频和其他附件。附件按文件名、类型和可用大小展示，并可交给系统查看器打开；附件目录与
+  文件保持只读，不得暴露新建、重命名、移动到回收站、笔记移动或左滑管理操作。
 
 ## Out of Scope
 

@@ -3,7 +3,7 @@
 ## Technical Context
 
 - Kotlin Android 工程位于 `android/`，使用项目内 Gradle Wrapper。
-- 当前开发版本为 `versionName 0.5.1`、`versionCode 10`；该版本为未发布开发基线，后续候选版本按
+- 当前开发版本为 `versionName 0.5.2`、`versionCode 11`；该版本为未发布开发基线，后续候选版本按
   [`docs/RELEASE_NOTES.md`](../../RELEASE_NOTES.md) 的规则提升并记录。
 - 通过 Storage Access Framework 选择 Vault 并持久化目录 URI 权限。
 - 通过 Activity Result API 拉起系统相机并复制返回内容。
@@ -43,6 +43,8 @@
 23. 在独立发布迁移中将 Android target SDK 提升至 34，并以当前 Gradle/AGP 可支持的
     Java/Kotlin 目标版本构建；逐项回归权限、相机、WebView、后台服务、通知、SAF 与 Mate 60
     HarmonyOS 4 兼容层，完成前不将单纯配置改动作为候选发布。
+24. 在主文件库中将 `assets` / `attachments` 作为只读附件目录展示，列出其中图片、视频与
+    其他文件并通过系统查看器打开；继续以仓储保护规则阻止附件目录及文件的结构性管理操作。
 
 ## Constitution Check
 

@@ -90,7 +90,11 @@
   `versionName`、单调递增 `versionCode` 并生成 fresh APK（FR-531）。（进行中：已输出
   `docs/specs/005-harmonyos4-android-apk/compatibility-audit.md` 审计报告，代码就绪 `FLAG_IMMUTABLE`，
   清单就绪 `FOREGROUND_SERVICE_DATA_SYNC` 与 `POST_NOTIFICATIONS`；当前工程维持 `targetSdk 28`，待分阶段提升与真机回归）。
+- [x] T557 Android：在主文件库显示只读 `assets` / `attachments` 目录及其中图片、视频和其他
+  附件，提供文件类型、大小与系统查看器入口；补充隐藏内部目录、附件分类和只读边界测试并生成 fresh APK（FR-532）。
+- [ ] T558 Mate 60：验证附件目录逐层浏览、图片/视频/其他文件系统查看器、无匹配查看器反馈、
+  深浅色、字体放大、TalkBack，以及附件目录和文件不出现结构管理操作（FR-532）。
 
 上一个 `0.5.0` / `versionCode 9` 基线已在本机通过共享 Vault 契约检查与 debug APK 构建。
-当前 `0.5.1` / `versionCode 10` 源码仍须运行 fresh Android 单测和打包；Mate 60 真机安装与
-验收仍未完成。
+当前 `0.5.2` / `versionCode 11` 源码已在 T557 变更后通过 175 项 Android 单测和 fresh debug
+APK 打包；Mate 60 真机安装与验收仍未完成。

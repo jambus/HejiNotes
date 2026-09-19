@@ -3,6 +3,7 @@ package com.jambus.heji
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.view.ContextThemeWrapper
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -565,7 +566,7 @@ class MainActivity : Activity() {
             val directoryReadable = repository.canReadDirectory(directory)
             val children = if (directoryReadable) {
                 repository.children(directory)
-                    .filterNot { isInternalDocument(it) }
+                    .filterNot { VaultBrowserPolicy.isHidden(it.relativePath) }
                     .sortedWith(compareBy<VaultDocument> { !repository.isDirectory(it) }
                         .thenBy { it.name.lowercase() })
             } else {
@@ -617,7 +618,16 @@ class MainActivity : Activity() {
             })
         }
         val folders = children.filter { repository.isDirectory(it) }
-        val notes = children.filter { !repository.isDirectory(it) && it.name.endsWith(".md", true) }
+        val notes = children.filter {
+            !repository.isDirectory(it) &&
+                !VaultBrowserPolicy.isReadOnlyAttachmentPath(it.relativePath) &&
+                VaultBrowserPolicy.fileKind(it.name, it.mimeType) == VaultBrowserPolicy.FileKind.MARKDOWN
+        }
+        val files = children.filter {
+            !repository.isDirectory(it) &&
+                (VaultBrowserPolicy.isReadOnlyAttachmentPath(it.relativePath) ||
+                    VaultBrowserPolicy.fileKind(it.name, it.mimeType) != VaultBrowserPolicy.FileKind.MARKDOWN)
+        }
 
         if (!directoryReadable) {
             content.addView(vaultAccessErrorState(), matchWrap())
@@ -629,7 +639,7 @@ class MainActivity : Activity() {
                 content.addView(infoBanner("今日笔记目录已不可用，已改为 Vault 根目录。请在设置中重新选择目录。"),
                     matchWrap().apply { bottomMargin = dp(12) })
             }
-            val eligibleRows = folders.isNotEmpty() || notes.isNotEmpty()
+            val eligibleRows = folders.any { !VaultBrowserPolicy.isReadOnlyAttachmentPath(it.relativePath) } || notes.isNotEmpty()
             if (eligibleRows && !repository.swipeDiscoveryHintSeen()) {
                 content.addView(swipeDiscoveryHint(), matchWrap().apply { bottomMargin = dp(4) })
             }
@@ -638,9 +648,15 @@ class MainActivity : Activity() {
                 content.addView(emptyState("当前目录没有文件夹"), matchWrap().apply { bottomMargin = dp(16) })
             } else {
                 content.addView(vaultGroup(folders.map { folder ->
-                    swipeableVaultRow(
-                        R.drawable.ic_browser_folder, folder.name, "文件夹", "文件夹", folder
-                    ) { openDirectory(folder) }
+                    if (VaultBrowserPolicy.isReadOnlyAttachmentPath(folder.relativePath)) {
+                        vaultRow(R.drawable.ic_browser_folder, folder.name, ui("只读附件目录"), ui("文件夹"), grouped = true) {
+                            openDirectory(folder)
+                        }
+                    } else {
+                        swipeableVaultRow(
+                            R.drawable.ic_browser_folder, folder.name, ui("文件夹"), ui("文件夹"), folder
+                        ) { openDirectory(folder) }
+                    }
                 }), matchWrap().apply { bottomMargin = dp(12) })
             }
             sectionLabel(content, "笔记", notes.size)
@@ -655,6 +671,26 @@ class MainActivity : Activity() {
                         "Markdown 笔记",
                         note
                     ) { openedFromSearch = false; openNote(note) }
+                }), matchWrap())
+            }
+            sectionLabel(content, ui("其他文件"), files.size)
+            if (files.isEmpty()) {
+                content.addView(emptyState(ui("当前目录没有其他文件")), matchWrap())
+            } else {
+                content.addView(vaultGroup(files.map { file ->
+                    val kind = VaultBrowserPolicy.fileKind(file.name, file.mimeType)
+                    val type = when (kind) {
+                        VaultBrowserPolicy.FileKind.IMAGE -> ui("图片")
+                        VaultBrowserPolicy.FileKind.VIDEO -> ui("视频")
+                        else -> ui("文件")
+                    }
+                    val icon = when (kind) {
+                        VaultBrowserPolicy.FileKind.IMAGE -> R.drawable.ic_browser_image
+                        VaultBrowserPolicy.FileKind.VIDEO -> R.drawable.ic_browser_video
+                        else -> R.drawable.ic_browser_file
+                    }
+                    val metadata = listOfNotNull(type, file.size?.takeIf { it >= 0L }?.let(::formatBytes)).joinToString(" · ")
+                    vaultRow(icon, file.name, metadata, type, grouped = true) { openVaultFile(file) }
                 }), matchWrap())
             }
         }
@@ -682,7 +718,7 @@ class MainActivity : Activity() {
                 if (!repository.canReadDirectory(requestedDirectory)) throw IllegalStateException("Directory unreadable")
                 val directoryReadable = true
                 val children = repository.verifiedChildren(requestedDirectory)
-                    .filterNot { isInternalDocument(it) }
+                    .filterNot { VaultBrowserPolicy.isHidden(it.relativePath) }
                     .sortedWith(compareBy<VaultDocument> { !repository.isDirectory(it) }.thenBy { it.name.lowercase() })
                 val previews = children
                     .filter { !repository.isDirectory(it) && it.name.endsWith(".md", true) }
@@ -3754,6 +3790,22 @@ class MainActivity : Activity() {
         setOnClickListener { onClick(this) }
     }
 
+    private fun openVaultFile(document: VaultDocument) {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(document.uri, VaultBrowserPolicy.viewerMimeType(document.name, document.mimeType))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = android.content.ClipData.newRawUri("vault-file", document.uri)
+        }
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            toast(ui("无法打开此文件，请安装支持该格式的查看器。"))
+        } catch (_: SecurityException) {
+            toast(ui("无法打开此文件，请安装支持该格式的查看器。"))
+        }
+    }
+
+    /** Attachment folders remain excluded from management-only directory pickers. */
     private fun isInternalDocument(document: VaultDocument): Boolean {
         val leaf = document.relativePath.substringAfterLast('/')
         return VaultPathPolicy.isProtected(document.relativePath) || leaf.startsWith(".markbook-")
