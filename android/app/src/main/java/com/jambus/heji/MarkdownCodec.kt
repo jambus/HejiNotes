@@ -230,7 +230,7 @@ object MarkdownCodec {
               }
               var editor = document.getElementById('editor');
               var lastRange = null;
-              var pendingMedia = null;
+              var mediaTokenCounter = 0;
               function mediaNode(node) {
                 while (node && node !== editor) {
                   if (node.nodeType === Node.ELEMENT_NODE && node.tagName.toLowerCase() === 'img' && node.hasAttribute('data-markdown')) return node;
@@ -242,6 +242,14 @@ object MarkdownCodec {
               function mediaBlock(node) {
                 var parent = node ? node.parentNode : null;
                 return parent && (parent.tagName.toLowerCase() === 'p' || parent.tagName.toLowerCase() === 'div') ? parent : node;
+              }
+              function mediaToken(node) {
+                var token = node.getAttribute('data-markbook-media-token');
+                if (!token) {
+                  token = 'media-' + (++mediaTokenCounter);
+                  node.setAttribute('data-markbook-media-token', token);
+                }
+                return token;
               }
               function ensureTrailingMediaLine() {
                 var last = editor.lastElementChild;
@@ -385,10 +393,12 @@ object MarkdownCodec {
                   }
                   return false;
                 },
-                removePendingMedia: function() {
-                  var node = pendingMedia;
-                  pendingMedia = null;
-                  if (!node || !editor.contains(node)) return false;
+                removeExpectedMedia: function(token, path) {
+                  var nodes = editor.querySelectorAll('[data-markbook-media-token]'), node = null;
+                  for (var i = 0; i < nodes.length; i++) {
+                    if (nodes[i].getAttribute('data-markbook-media-token') === token) { node = nodes[i]; break; }
+                  }
+                  if (!node || !editor.contains(node) || (node.getAttribute('data-markdown') || '') !== path) return false;
                   var block = mediaBlock(node);
                   node.remove();
                   if (block && block !== node && !block.querySelector('img[data-markdown],[data-markbook-video="true"]') && !text(block).trim()) {
@@ -398,7 +408,6 @@ object MarkdownCodec {
                     selection.removeAllRanges(); selection.addRange(range); editor.focus();
                     lastRange = range.cloneRange();
                   }
-                  notifyChange();
                   return true;
                 },
                 applyFormat: applyFormat
@@ -417,8 +426,11 @@ object MarkdownCodec {
                 var media = mediaNode(event.target);
                 if (!media || !window.Android || !window.Android.openMediaActions) return;
                 event.preventDefault();
-                pendingMedia = media;
-                Android.openMediaActions(media.getAttribute('data-markbook-video') === 'true' ? 'video' : 'image');
+                Android.openMediaActions(
+                  media.getAttribute('data-markbook-video') === 'true' ? 'video' : 'image',
+                  media.getAttribute('data-markdown') || '',
+                  mediaToken(media)
+                );
               });
               editor.addEventListener('click', function(event) {
                 var node = event.target;

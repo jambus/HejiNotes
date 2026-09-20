@@ -274,7 +274,7 @@ object AppNoteSaveCoordinator : Executor {
         onComplete: (success: Boolean, refreshed: VaultDocument?) -> Unit
     ) {
         val pending = latestSaveByNote[note.uri.toString()]?.takeIf { it.revision == revision }
-        submitSaveInternal(repository, note, content, revision, pending, onComplete)
+        submitSaveInternal(repository, note, content, revision, pending, null, onComplete)
     }
 
     fun submitSave(
@@ -283,6 +283,7 @@ object AppNoteSaveCoordinator : Executor {
         content: String,
         revision: Long,
         operationId: String,
+        writeOverride: (() -> Boolean)? = null,
         onComplete: (success: Boolean, refreshed: VaultDocument?) -> Unit
     ) {
         val pending = pendingSavesById[operationId]
@@ -290,7 +291,7 @@ object AppNoteSaveCoordinator : Executor {
             dispatchToMain { onComplete(false, null) }
             return
         }
-        submitSaveInternal(repository, note, content, revision, pending, onComplete)
+        submitSaveInternal(repository, note, content, revision, pending, writeOverride, onComplete)
     }
 
     private fun submitSaveInternal(
@@ -299,6 +300,7 @@ object AppNoteSaveCoordinator : Executor {
         content: String,
         revision: Long,
         pending: PendingNoteSave?,
+        writeOverride: (() -> Boolean)? = null,
         onComplete: (success: Boolean, refreshed: VaultDocument?) -> Unit
     ) {
         val noteKey = note.uri.toString()
@@ -329,7 +331,7 @@ object AppNoteSaveCoordinator : Executor {
                     dispatchToMain { onComplete(false, null) }
                     return@execute
                 }
-                val success = repository.saveText(note, content)
+                val success = writeOverride?.invoke() ?: repository.saveText(note, content)
                 if (pending != null) synchronized(pending) {
                     if (pending.state == PendingNoteSaveState.CLEARED) {
                         dispatchToMain { onComplete(false, null) }

@@ -59,6 +59,8 @@ class MainActivity : Activity() {
     private var saveActionView: TextView? = null
     private var editorContextText = ""
     private var editorStatusActions: LinearLayout? = null
+    private var inlineAttachmentDeleteMessage: String? = null
+    private var inlineAttachmentCleanupRetryable = false
     private val formatActions = mutableMapOf<String, ImageButton>()
     private val handler = Handler(Looper.getMainLooper())
     private val autosave = Runnable { saveCurrentNote() }
@@ -2314,6 +2316,7 @@ class MainActivity : Activity() {
         setContentView(root)
         editor.loadDataWithBaseURL(null, renderNote(note, content), "text/html", "UTF-8", null)
         updateSaveStatus()
+        refreshInlineAttachmentCleanupStatus()
         restorePendingVideoConfirmation(note)
     }
 
@@ -2482,7 +2485,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun saveCurrentNote(onComplete: ((Boolean) -> Unit)? = null) {
+    private fun saveCurrentNote(
+        inlineDeleteRequest: InlineAttachmentDeleteRequest? = null,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
         val editor = webView
         if (screen != Screen.EDITOR || editor == null) {
             onComplete?.invoke(false)
@@ -2494,10 +2500,10 @@ class MainActivity : Activity() {
         }
         onComplete?.let(saveWaiters::add)
         handler.removeCallbacks(autosave)
-        startNextSave()
+        startNextSave(inlineDeleteRequest)
     }
 
-    private fun startNextSave() {
+    private fun startNextSave(inlineDeleteRequest: InlineAttachmentDeleteRequest? = null) {
         val editor = webView ?: return
         val note = currentNote ?: return
         val request = saveCoordinator.beginSave() ?: run {
@@ -2528,7 +2534,16 @@ class MainActivity : Activity() {
                 if (value != null) {
                     val content = decodeJavascriptString(value)
                     if (!AppNoteSaveCoordinator.submitSnapshot(operationId, content)) return@evaluateJavascript
-                    AppNoteSaveCoordinator.submitSave(repository, note, content, request.revision, operationId) { success, refreshed ->
+                    AppNoteSaveCoordinator.submitSave(
+                        repository,
+                        note,
+                        content,
+                        request.revision,
+                        operationId,
+                        writeOverride = inlineDeleteRequest?.let { deleteRequest ->
+                            { repository.saveTextForInlineAttachmentDelete(deleteRequest, note, content) }
+                        }
+                    ) { success, refreshed ->
                         if (isFinishing || isDestroyed || generation != editorGeneration || screen != Screen.EDITOR) {
                             return@submitSave
                         }
@@ -2540,7 +2555,7 @@ class MainActivity : Activity() {
                             saveWaiters.clear()
                             pending.forEach { it(false) }
                         } else if (saveCoordinator.hasUnsavedChanges) {
-                            startNextSave()
+                            startNextSave(inlineDeleteRequest)
                         } else {
                             val pending = saveWaiters.toList()
                             saveWaiters.clear()
@@ -2570,7 +2585,7 @@ class MainActivity : Activity() {
     private fun updateSaveStatus() {
         val state = saveCoordinator.state
         val message = when (state) {
-            RevisionSaveCoordinator.State.SAVED -> "已保存"
+            RevisionSaveCoordinator.State.SAVED -> inlineAttachmentDeleteMessage?.let { "已保存 · $it" } ?: "已保存"
             RevisionSaveCoordinator.State.DIRTY -> "未保存"
             RevisionSaveCoordinator.State.SAVING -> "正在保存…"
             RevisionSaveCoordinator.State.FAILED -> "保存失败 · 点按此处重试保存；请检查 Vault 权限或存储空间"
@@ -2591,8 +2606,13 @@ class MainActivity : Activity() {
         view.setOnClickListener(null)
         editorStatusActions?.apply {
             removeAllViews()
-            visibility = if (retryable) View.VISIBLE else View.GONE
+            visibility = if (retryable || inlineAttachmentCleanupRetryable) View.VISIBLE else View.GONE
             if (retryable) addView(action("重试保存", true) { saveCurrentNote() }, matchWrap())
+            if (inlineAttachmentCleanupRetryable) {
+                addView(action("重试附件清理", false) { retryInlineAttachmentCleanup() }, matchWrap().apply {
+                    topMargin = if (retryable) dp(6) else 0
+                })
+            }
         }
         if (retryable) view.announceForAccessibility(message)
     }
@@ -3394,24 +3414,191 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun openMediaActions(kind: String) {
+        fun openMediaActions(kind: String, rawDestination: String, mediaToken: String) {
             handler.post {
                 if (screen != Screen.EDITOR || generation != editorGeneration) return@post
-                showMediaActions(kind)
+                showMediaActions(kind, rawDestination, mediaToken)
             }
         }
     }
 
-    private fun showMediaActions(kind: String) {
+    private fun showMediaActions(kind: String, rawDestination: String, mediaToken: String) {
         val title = if (kind == "video") ui("视频操作") else ui("图片操作")
         AlertDialog.Builder(dialogContext())
             .setTitle(title)
-            .setMessage(ui("只会删除正文中的引用，Vault 内的附件文件会保留。"))
+            .setMessage(ui("正文会先保存；确认没有其他笔记引用后，将永久删除这个附件文件。无法安全确认时文件会保留。"))
             .setNegativeButton(ui("取消"), null)
-            .setPositiveButton(ui("从正文删除")) { _, _ ->
-                webView?.evaluateJavascript("window.markbook && window.markbook.removePendingMedia()", null)
+            .setPositiveButton(ui("删除引用和附件")) { _, _ ->
+                if (saveCoordinator.hasUnsavedChanges || saveCoordinator.hasInFlightSave) {
+                    toast("请等待当前正文保存完成后再删除附件")
+                } else {
+                    handler.removeCallbacks(autosave)
+                    webView?.isEnabled = false
+                    formatActions.values.forEach { it.isEnabled = false }
+                    prepareInlineAttachmentDelete(rawDestination, mediaToken)
+                }
             }
             .show()
+    }
+
+    private fun prepareInlineAttachmentDelete(rawDestination: String, mediaToken: String) {
+        val note = currentNote ?: return
+        val generation = editorGeneration
+        inlineAttachmentDeleteMessage = null
+        structuralIoExecutor.execute {
+            val vaultId = repository.savedVaultUri()?.toString().orEmpty()
+            val lease = VaultMutationLease.tryAcquire(vaultId, VaultMutationLease.Kind.STRUCTURAL)
+            val prepared = if (lease == null) {
+                InlineAttachmentPrepareResult.Rejected("当前 Vault 正在同步，请完成后重试")
+            } else try {
+                repository.prepareInlineAttachmentDelete(note, rawDestination)
+            } finally {
+                VaultMutationLease.release(lease)
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed || screen != Screen.EDITOR || generation != editorGeneration) {
+                    if (prepared is InlineAttachmentPrepareResult.Ready) {
+                        structuralIoExecutor.execute { repository.cancelInlineAttachmentDelete(prepared.request) }
+                    }
+                    return@runOnUiThread
+                }
+                when (prepared) {
+                    is InlineAttachmentPrepareResult.Rejected -> {
+                        webView?.isEnabled = true
+                        formatActions.values.forEach { it.isEnabled = true }
+                        toast(prepared.message)
+                    }
+                    is InlineAttachmentPrepareResult.Ready -> removePreparedInlineMedia(
+                        prepared.request, generation, mediaToken, rawDestination
+                    )
+                }
+            }
+        }
+    }
+
+    private fun removePreparedInlineMedia(
+        request: InlineAttachmentDeleteRequest,
+        generation: Long,
+        mediaToken: String,
+        rawDestination: String
+    ) {
+        val editor = webView ?: run {
+            structuralIoExecutor.execute { repository.cancelInlineAttachmentDelete(request) }
+            return
+        }
+        editor.isEnabled = false
+        formatActions.values.forEach { it.isEnabled = false }
+        editor.evaluateJavascript(
+            "window.markbook && window.markbook.removeExpectedMedia ? window.markbook.removeExpectedMedia(" +
+                org.json.JSONObject.quote(mediaToken) + "," + org.json.JSONObject.quote(rawDestination) + ") : false"
+        ) { value ->
+            if (value != "true" || screen != Screen.EDITOR || generation != editorGeneration) {
+                editor.isEnabled = true
+                formatActions.values.forEach { it.isEnabled = true }
+                structuralIoExecutor.execute { repository.cancelInlineAttachmentDelete(request) }
+                return@evaluateJavascript
+            }
+            saveCoordinator.markEdited()
+            updateSaveStatus()
+            saveCurrentNote(inlineDeleteRequest = request) { success ->
+                if (!success) {
+                    editor.isEnabled = true
+                    formatActions.values.forEach { it.isEnabled = true }
+                    structuralIoExecutor.execute {
+                        repository.cancelInlineAttachmentDelete(request)
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed || generation != editorGeneration) return@runOnUiThread
+                            currentNote?.uri?.toString()?.let(AppNoteSaveCoordinator::discardNoteRecovery)
+                            inlineAttachmentDeleteMessage = "附件删除已取消：正文发生外部变化或无法安全保存"
+                            inlineAttachmentCleanupRetryable = false
+                            currentNote?.let(::openNote)
+                            toast("附件删除已取消，已重新载入 Vault 正文")
+                        }
+                    }
+                    return@saveCurrentNote
+                }
+                finishPreparedInlineAttachmentDelete(request, generation)
+            }
+        }
+    }
+
+    private fun finishPreparedInlineAttachmentDelete(request: InlineAttachmentDeleteRequest, generation: Long) {
+        structuralIoExecutor.execute {
+            val vaultId = repository.savedVaultUri()?.toString().orEmpty()
+            val lease = VaultMutationLease.tryAcquire(vaultId, VaultMutationLease.Kind.STRUCTURAL)
+            val result = if (lease == null) {
+                InlineAttachmentDeleteResult.Retained("正文已保存；当前 Vault 正在同步，附件将在恢复检查时重试", true)
+            } else try {
+                repository.commitInlineAttachmentDelete(request)
+            } finally {
+                VaultMutationLease.release(lease)
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed || generation != editorGeneration) return@runOnUiThread
+                webView?.isEnabled = true
+                formatActions.values.forEach { it.isEnabled = true }
+                when (result) {
+                    InlineAttachmentDeleteResult.Deleted -> {
+                        inlineAttachmentDeleteMessage = null
+                        inlineAttachmentCleanupRetryable = false
+                        updateSaveStatus()
+                        toast("正文和附件已删除")
+                    }
+                    is InlineAttachmentDeleteResult.Retained -> {
+                        inlineAttachmentDeleteMessage = result.message
+                        inlineAttachmentCleanupRetryable = result.retryable
+                        updateSaveStatus()
+                        toast(result.message)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun refreshInlineAttachmentCleanupStatus() {
+        val generation = editorGeneration
+        structuralIoExecutor.execute {
+            val pending = repository.pendingInlineAttachmentDeleteCount()
+            runOnUiThread {
+                if (isFinishing || isDestroyed || screen != Screen.EDITOR || generation != editorGeneration) return@runOnUiThread
+                if (pending > 0) {
+                    inlineAttachmentDeleteMessage = "有 $pending 个附件清理任务待安全复核"
+                    inlineAttachmentCleanupRetryable = true
+                    updateSaveStatus()
+                }
+            }
+        }
+    }
+
+    private fun retryInlineAttachmentCleanup() {
+        val generation = editorGeneration
+        structuralIoExecutor.execute {
+            val vaultId = repository.savedVaultUri()?.toString().orEmpty()
+            val lease = VaultMutationLease.tryAcquire(vaultId, VaultMutationLease.Kind.STRUCTURAL)
+            val result = if (lease == null) {
+                InlineAttachmentDeleteResult.Retained("当前 Vault 正在同步，附件清理尚未执行", true)
+            } else try {
+                repository.retryInlineAttachmentDeletes()
+            } finally {
+                if (lease != null) VaultMutationLease.release(lease)
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed || screen != Screen.EDITOR || generation != editorGeneration) return@runOnUiThread
+                when (result) {
+                    InlineAttachmentDeleteResult.Deleted -> {
+                        inlineAttachmentDeleteMessage = null
+                        inlineAttachmentCleanupRetryable = false
+                        toast("附件清理已完成")
+                    }
+                    is InlineAttachmentDeleteResult.Retained -> {
+                        inlineAttachmentDeleteMessage = result.message
+                        inlineAttachmentCleanupRetryable = result.retryable
+                        toast(result.message)
+                    }
+                }
+                updateSaveStatus()
+            }
+        }
     }
 
     private fun openAttachmentInSystemPlayer(relativePath: String) {

@@ -124,6 +124,24 @@ transactions before a move begins.
 Deletes move notes and folders into `.trash/`; this directory is excluded from remote sync.
 Permanent deletion is a separate explicit operation. Attachments are retained until a later
 explicit cleanup flow, because they may still be referenced by another note.
+An editor media-reference removal is such an explicit cleanup flow only after the user confirms
+that both the Markdown reference and its exact referenced attachment file should be removed. The
+client must durably create and flush a Vault-local attachment-delete marker before changing the
+editor DOM. It saves and re-reads the Markdown first, then strictly scans every readable Markdown
+file, including Markdown in `.trash/`, for the exact canonical Vault path. It may permanently
+delete only that exact file when the reference is absent everywhere and the file identity and
+fingerprint still match the prepared marker. It never infers or deletes sibling `-o`, `-c`, or
+other bundle files. Ambiguous syntax, an unreadable file or directory, an external note change,
+a replaced attachment, permission loss, or a sync/structural lease conflict keeps the attachment.
+The saved Markdown is not rolled back merely because attachment cleanup was retained or failed.
+
+Attachment-delete markers progress through `PREPARED → NOTE_WRITE_INTENT → NOTE_COMMITTED → REFERENCES_VERIFIED →
+DELETE_INTENT → DELETED`; marker cleanup follows only a verified terminal state. Recovery before
+`NOTE_COMMITTED` never deletes an attachment. `NOTE_WRITE_INTENT` records the intended saved-body
+hash before a compare-and-write against the prepared old-body hash. Recovery at or after a committed note repeats the
+strict reference and identity checks and is idempotent: it may finish deleting the exact file, or
+retain the file and marker when the result is uncertain, but must never delete a referenced or
+changed file.
 “Clear trash” permanently deletes only the current contents directly below the Vault-root
 `.trash/` after explicit user confirmation. The recycle-bin browser lists only direct children;
 Markdown may be inspected read-only, but no in-app restore is implied. Single-item and clear
