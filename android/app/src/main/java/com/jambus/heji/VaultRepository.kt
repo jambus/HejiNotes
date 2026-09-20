@@ -604,6 +604,16 @@ data class InlineAttachmentDeleteRequest(
     val transaction: InlineAttachmentDeleteTransaction
 )
 
+data class DirectAssetDeleteRequest(
+    val marker: VaultDocument,
+    val transaction: DirectAssetDeleteTransaction
+)
+
+sealed class DirectAssetDeletePrepareResult {
+    data class Ready(val request: DirectAssetDeleteRequest) : DirectAssetDeletePrepareResult()
+    data class Rejected(val message: String) : DirectAssetDeletePrepareResult()
+}
+
 sealed class InlineAttachmentPrepareResult {
     data class Ready(val request: InlineAttachmentDeleteRequest) : InlineAttachmentPrepareResult()
     data class Rejected(val message: String) : InlineAttachmentPrepareResult()
@@ -1539,6 +1549,49 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
     fun commitInlineAttachmentDelete(request: InlineAttachmentDeleteRequest): InlineAttachmentDeleteResult =
         finishInlineAttachmentDelete(request.marker, request.transaction, recovery = false)
 
+    fun prepareDirectAssetDelete(document: VaultDocument): DirectAssetDeletePrepareResult {
+        val tree = savedVaultUri() ?: return DirectAssetDeletePrepareResult.Rejected("无法访问 Vault")
+        val path = document.relativePath
+        val parts = path.split('/').filter { it.isNotBlank() }
+        if (!VaultBrowserPolicy.canPermanentlyDeleteAttachment(
+                path, document.name, document.mimeType, isDirectory(document)
+            ) || parts.any { it == ".markbook" || it == ".trash" }) {
+            return DirectAssetDeletePrepareResult.Rejected("只能永久删除附件目录中的图片或视频")
+        }
+        val current = try { findByRelativePathStrict(tree, path) } catch (_: Exception) {
+            return DirectAssetDeletePrepareResult.Rejected("无法读取附件，未执行删除")
+        } ?: return DirectAssetDeletePrepareResult.Rejected("附件文件已不存在")
+        if (current.uri != document.uri || isDirectory(current)) {
+            return DirectAssetDeletePrepareResult.Rejected("附件已发生变化，未执行删除")
+        }
+        val hash = try { resolver.openInputStream(current.uri)?.use(::sha256) } catch (_: Exception) { null }
+            ?: return DirectAssetDeletePrepareResult.Rejected("无法校验附件，未执行删除")
+        val markerDirectory = findOrCreateDirectory(tree, listOf(".markbook", "attachment-deletes"))
+            ?: return DirectAssetDeletePrepareResult.Rejected("无法创建安全删除标记")
+        val id = UUID.randomUUID().toString()
+        val transaction = DirectAssetDeleteTransaction(
+            id, path, current.uri.toString(), hash, current.size ?: -1L,
+            DirectAssetDeleteTransaction.Stage.DIRECT_CONFIRMED
+        )
+        val markerUri = DocumentsContract.createDocument(
+            resolver, markerDirectory, "text/plain", ".markbook-direct-asset-delete-$id.txn"
+        ) ?: return DirectAssetDeletePrepareResult.Rejected("无法创建安全删除标记")
+        val marker = resolveMutationDocument(markerDirectory, ".markbook/attachment-deletes", markerUri)
+            ?: run {
+                runCatching { DocumentsContract.deleteDocument(resolver, markerUri) }
+                return DirectAssetDeletePrepareResult.Rejected("无法解析安全删除标记")
+            }
+        return if (writeDirectAssetDeleteMarker(marker, transaction)) {
+            DirectAssetDeletePrepareResult.Ready(DirectAssetDeleteRequest(marker, transaction))
+        } else {
+            runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+            DirectAssetDeletePrepareResult.Rejected("无法写入安全删除标记")
+        }
+    }
+
+    fun commitDirectAssetDelete(request: DirectAssetDeleteRequest): InlineAttachmentDeleteResult =
+        finishDirectAssetDelete(request.marker, request.transaction)
+
     fun pendingInlineAttachmentDeleteCount(): Int {
         val tree = savedVaultUri() ?: return 0
         val directory = inlineAttachmentDeleteMarkerDirectory(tree) ?: return 0
@@ -1554,12 +1607,26 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         var retryableRetained: InlineAttachmentDeleteResult.Retained? = null
         var terminalRetained: InlineAttachmentDeleteResult.Retained? = null
         markers.forEach { marker ->
-            val transaction = readText(marker)?.let(InlineAttachmentDeleteTransaction::parse)
-            if (transaction == null) {
+            val payload = readText(marker)
+            if (payload == null) {
                 retryableRetained = InlineAttachmentDeleteResult.Retained("存在无法读取的附件清理标记", true)
                 return@forEach
             }
-            val result = finishInlineAttachmentDelete(marker, transaction, recovery = true)
+            val result = if (marker.name.startsWith(".markbook-direct-asset-delete-")) {
+                val transaction = DirectAssetDeleteTransaction.parse(payload)
+                if (transaction == null) {
+                    retryableRetained = InlineAttachmentDeleteResult.Retained("存在损坏的直接删除标记", true)
+                    return@forEach
+                }
+                finishDirectAssetDelete(marker, transaction)
+            } else {
+                val transaction = InlineAttachmentDeleteTransaction.parse(payload)
+                if (transaction == null) {
+                    retryableRetained = InlineAttachmentDeleteResult.Retained("存在损坏的正文附件标记", true)
+                    return@forEach
+                }
+                finishInlineAttachmentDelete(marker, transaction, recovery = true)
+            }
             if (result is InlineAttachmentDeleteResult.Retained) {
                 if (result.retryable) retryableRetained = result else terminalRetained = result
             }
@@ -2198,7 +2265,9 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         recovery: Boolean
     ): InlineAttachmentDeleteResult {
         val tree = savedVaultUri() ?: return InlineAttachmentDeleteResult.Retained("无法访问 Vault，附件未删除", true)
-        var transaction = readText(marker)?.let(InlineAttachmentDeleteTransaction::parse) ?: original
+        var transaction = AttachmentDeleteMarkerPolicy.parseDurable(
+            readText(marker), InlineAttachmentDeleteTransaction::parse
+        ) ?: return InlineAttachmentDeleteResult.Retained("无法读取持久删除标记，附件未删除", true)
         if (!InlineAttachmentDeleteRecoveryPolicy.mayDelete(transaction.stage)) {
             if (recovery) {
                 val preparedNote = try { findByRelativePathStrict(tree, transaction.notePath) } catch (_: Exception) { null }
@@ -2295,8 +2364,14 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         val directory = inlineAttachmentDeleteMarkerDirectory(tree) ?: return
         val markers = try { listChildrenStrict(tree, directory.uri, ".markbook/attachment-deletes") } catch (_: Exception) { return }
         markers.forEach { marker ->
-            val transaction = readText(marker)?.let(InlineAttachmentDeleteTransaction::parse) ?: return@forEach
-            finishInlineAttachmentDelete(marker, transaction, recovery = true)
+            val payload = readText(marker) ?: return@forEach
+            if (marker.name.startsWith(".markbook-direct-asset-delete-")) {
+                payload.let(DirectAssetDeleteTransaction::parse)?.let { finishDirectAssetDelete(marker, it) }
+            } else {
+                payload.let(InlineAttachmentDeleteTransaction::parse)?.let {
+                    finishInlineAttachmentDelete(marker, it, recovery = true)
+                }
+            }
         }
     }
 
@@ -2308,6 +2383,80 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
     private fun writeInlineAttachmentDeleteMarker(
         marker: VaultDocument,
         transaction: InlineAttachmentDeleteTransaction
+    ): Boolean = try {
+        resolver.openOutputStream(marker.uri, "wt")?.use { output ->
+            output.write(transaction.serialize().toByteArray(StandardCharsets.UTF_8))
+            output.flush()
+        } != null
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun finishDirectAssetDelete(
+        marker: VaultDocument,
+        original: DirectAssetDeleteTransaction
+    ): InlineAttachmentDeleteResult {
+        val tree = savedVaultUri() ?: return InlineAttachmentDeleteResult.Retained("无法访问 Vault，附件未删除", true)
+        var transaction = AttachmentDeleteMarkerPolicy.parseDurable(
+            readText(marker), DirectAssetDeleteTransaction::parse
+        ) ?: return InlineAttachmentDeleteResult.Retained("无法读取直接删除确认标记，文件已保留", true)
+        when (exactAttachmentReferenceScan(tree, transaction.assetPath)) {
+            ExactAttachmentReferenceScan.REFERENCED -> {
+                runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+                return InlineAttachmentDeleteResult.Retained("该文件仍被 Markdown 引用，未执行删除", false)
+            }
+            ExactAttachmentReferenceScan.AMBIGUOUS ->
+                return InlineAttachmentDeleteResult.Retained("存在无法确认的附件引用，文件已保留", true)
+            ExactAttachmentReferenceScan.UNREADABLE ->
+                return InlineAttachmentDeleteResult.Retained("部分 Vault 内容无法读取，文件已保留", true)
+            ExactAttachmentReferenceScan.NONE -> Unit
+        }
+        val asset = try { findByRelativePathStrict(tree, transaction.assetPath) } catch (_: Exception) {
+            return InlineAttachmentDeleteResult.Retained("附件状态无法确认，未执行删除", true)
+        }
+        if (asset == null) {
+            runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+            return InlineAttachmentDeleteResult.Deleted
+        }
+        val currentHash = try { resolver.openInputStream(asset.uri)?.use(::sha256) } catch (_: Exception) { null }
+        if (asset.uri.toString() != transaction.assetUri || currentHash != transaction.assetSha256 ||
+            (transaction.assetSize >= 0L && asset.size != null && asset.size != transaction.assetSize)) {
+            runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+            return InlineAttachmentDeleteResult.Retained("附件已被外部替换，未删除新文件", false)
+        }
+        when (exactAttachmentReferenceScan(tree, transaction.assetPath)) {
+            ExactAttachmentReferenceScan.REFERENCED ->
+                return InlineAttachmentDeleteResult.Retained("删除前发现新的 Markdown 引用，文件已保留", true)
+            ExactAttachmentReferenceScan.AMBIGUOUS ->
+                return InlineAttachmentDeleteResult.Retained("删除前发现无法确认的引用，文件已保留", true)
+            ExactAttachmentReferenceScan.UNREADABLE ->
+                return InlineAttachmentDeleteResult.Retained("删除前复核无法完成，文件已保留", true)
+            ExactAttachmentReferenceScan.NONE -> Unit
+        }
+        transaction = transaction.withStage(DirectAssetDeleteTransaction.Stage.REFERENCES_VERIFIED)
+        if (!writeDirectAssetDeleteMarker(marker, transaction)) {
+            return InlineAttachmentDeleteResult.Retained("无法记录引用复核结果，文件未删除", true)
+        }
+        transaction = transaction.withStage(DirectAssetDeleteTransaction.Stage.DELETE_INTENT)
+        if (!writeDirectAssetDeleteMarker(marker, transaction)) {
+            return InlineAttachmentDeleteResult.Retained("无法记录删除意图，文件未删除", true)
+        }
+        try { DocumentsContract.deleteDocument(resolver, asset.uri) } catch (_: Exception) { }
+        val stillExists = try { findByRelativePathStrict(tree, transaction.assetPath) } catch (_: Exception) {
+            return InlineAttachmentDeleteResult.Retained("删除结果无法确认，已保留恢复标记", true)
+        }
+        if (stillExists != null) {
+            return InlineAttachmentDeleteResult.Retained("文件删除失败，稍后可重试", true)
+        }
+        transaction = transaction.withStage(DirectAssetDeleteTransaction.Stage.DELETED)
+        writeDirectAssetDeleteMarker(marker, transaction)
+        runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+        return InlineAttachmentDeleteResult.Deleted
+    }
+
+    private fun writeDirectAssetDeleteMarker(
+        marker: VaultDocument,
+        transaction: DirectAssetDeleteTransaction
     ): Boolean = try {
         resolver.openOutputStream(marker.uri, "wt")?.use { output ->
             output.write(transaction.serialize().toByteArray(StandardCharsets.UTF_8))

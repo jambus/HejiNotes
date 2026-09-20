@@ -37,6 +37,32 @@ data class InlineAttachmentDeleteTransaction(
     }
 }
 
+data class DirectAssetDeleteTransaction(
+    val id: String,
+    val assetPath: String,
+    val assetUri: String,
+    val assetSha256: String,
+    val assetSize: Long,
+    val stage: Stage
+) {
+    enum class Stage { DIRECT_CONFIRMED, REFERENCES_VERIFIED, DELETE_INTENT, DELETED }
+
+    fun withStage(next: Stage): DirectAssetDeleteTransaction = copy(stage = next)
+
+    fun serialize(): String = listOf(id, assetPath, assetUri, assetSha256, assetSize.toString(), stage.name)
+        .joinToString("\n") { Base64.getUrlEncoder().encodeToString(it.toByteArray(Charsets.UTF_8)) }
+
+    companion object {
+        fun parse(value: String): DirectAssetDeleteTransaction? = runCatching {
+            val fields = value.split('\n').map { String(Base64.getUrlDecoder().decode(it), Charsets.UTF_8) }
+            if (fields.size != 6) return null
+            DirectAssetDeleteTransaction(
+                fields[0], fields[1], fields[2], fields[3], fields[4].toLong(), Stage.valueOf(fields[5])
+            )
+        }.getOrNull()
+    }
+}
+
 object InlineAttachmentReferencePolicy {
     enum class Status { NONE, REFERENCED, AMBIGUOUS }
 
@@ -98,4 +124,8 @@ object InlineAttachmentDeleteRecoveryPolicy {
         )
 
     fun shouldScanRootDirectory(name: String): Boolean = name !in setOf(".obsidian", ".markbook")
+}
+
+object AttachmentDeleteMarkerPolicy {
+    fun <T> parseDurable(payload: String?, parser: (String) -> T?): T? = payload?.let(parser)
 }

@@ -9,7 +9,7 @@ import android.content.Context
 object UiText {
     private val english = mapOf(
         "设置" to "Settings", "切换 Vault" to "Switch Vault", "文件" to "Files", "文件夹" to "Folders", "笔记" to "Notes",
-        "图片" to "Image", "视频" to "Video", "其他文件" to "Other files", "只读附件目录" to "Read-only attachments",
+        "图片" to "Image", "视频" to "Video", "其他文件" to "Other files", "附件目录" to "Attachments",
         "搜索笔记" to "Search notes",
         "‹  文件" to "‹  Files", "‹  设置" to "‹  Settings", "‹  回收站" to "‹  Trash", "‹  上一级" to "‹  Up",
         "更多选项" to "More options", "新建" to "New", "打开今日笔记" to "Open today’s note",
@@ -22,6 +22,9 @@ object UiText {
         "拍摄" to "Capture", "拍照" to "Take photo", "录视频" to "Record video", "插入照片" to "Insert photo",
         "插入视频" to "Insert video", "重新录制" to "Record again", "确认视频" to "Confirm video",
         "图片操作" to "Image actions", "视频操作" to "Video actions", "删除引用和附件" to "Delete reference and attachment",
+        "仅从正文删除（保留附件）" to "Remove from note only (keep attachment)",
+        "删除正文引用并永久删除附件" to "Delete reference and attachment permanently",
+        "永久删除附件" to "Delete attachment permanently",
         "正文会先保存；确认没有其他笔记引用后，将永久删除这个附件文件。无法安全确认时文件会保留。" to "The note is saved first. This attachment file is permanently deleted only when no other note references it; otherwise it is retained.",
         "调整照片" to "Adjust photo", "矩形裁剪" to "Rectangle crop", "四点校正" to "Perspective correction",
         "撤销" to "Undo", "重做" to "Redo", "加粗" to "Bold", "斜体" to "Italic", "添加标签" to "Add tag",

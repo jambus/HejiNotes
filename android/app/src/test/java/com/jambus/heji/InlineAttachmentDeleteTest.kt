@@ -25,6 +25,20 @@ class InlineAttachmentDeleteTest {
         assertEquals(value, InlineAttachmentDeleteTransaction.parse(value.serialize()))
     }
 
+    @Test fun `direct asset transaction round trips durable confirmation`() {
+        val value = DirectAssetDeleteTransaction(
+            "id", "assets/note/video.mp4", "content://provider/video", "hash", 99L,
+            DirectAssetDeleteTransaction.Stage.DIRECT_CONFIRMED
+        )
+        assertEquals(value, DirectAssetDeleteTransaction.parse(value.serialize()))
+        assertNull(DirectAssetDeleteTransaction.parse("broken"))
+    }
+
+    @Test fun `unreadable or corrupt durable marker never authorizes deletion`() {
+        assertNull(AttachmentDeleteMarkerPolicy.parseDurable(null, DirectAssetDeleteTransaction::parse))
+        assertNull(AttachmentDeleteMarkerPolicy.parseDurable("broken", DirectAssetDeleteTransaction::parse))
+    }
+
     @Test fun `exact references resolve across markdown forms and encoding`() {
         val target = "项目/assets/笔记/a (1).jpg"
         listOf(

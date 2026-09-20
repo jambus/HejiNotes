@@ -126,6 +126,8 @@ Permanent deletion is a separate explicit operation. Attachments are retained un
 explicit cleanup flow, because they may still be referenced by another note.
 An editor media-reference removal is such an explicit cleanup flow only after the user confirms
 that both the Markdown reference and its exact referenced attachment file should be removed. The
+editor also offers a separate “remove reference only” action that behaves as an ordinary Markdown
+edit and never creates a cleanup marker or modifies any attachment file. The combined-delete flow
 client must durably create and flush a Vault-local attachment-delete marker before changing the
 editor DOM. It saves and re-reads the Markdown first, then strictly scans every readable Markdown
 file, including Markdown in `.trash/`, for the exact canonical Vault path. It may permanently
@@ -142,6 +144,17 @@ hash before a compare-and-write against the prepared old-body hash. Recovery at 
 strict reference and identity checks and is idempotent: it may finish deleting the exact file, or
 retain the file and marker when the result is uncertain, but must never delete a referenced or
 changed file.
+
+The attachment browser may permanently delete a user-confirmed image or video only through a
+separate direct-asset transaction. Its flushed marker records a `DIRECT_CONFIRMED` state plus the
+canonical path, provider identity, SHA-256 and size. Recovery may resume from `DIRECT_CONFIRMED`
+because it is durable proof of the direct deletion confirmation; it must not fabricate an inline
+`NOTE_COMMITTED` stage. Under the same-Vault structural lease, the client strictly scans all
+Markdown twice, revalidates the exact file identity, records `DELETE_INTENT`, deletes only that
+file, verifies strict absence, records `DELETED`, then removes the marker. A referenced file is a
+terminal rejection. Ambiguous or unreadable scans, changed identity, unknown deletion results or
+permission loss retain the file; retryable uncertainty retains the marker. Direct deletion never
+deletes sibling files or the containing bundle directory.
 “Clear trash” permanently deletes only the current contents directly below the Vault-root
 `.trash/` after explicit user confirmation. The recycle-bin browser lists only direct children;
 Markdown may be inspected read-only, but no in-app restore is implied. Single-item and clear

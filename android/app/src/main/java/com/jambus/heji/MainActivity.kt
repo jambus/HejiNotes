@@ -651,7 +651,7 @@ class MainActivity : Activity() {
             } else {
                 content.addView(vaultGroup(folders.map { folder ->
                     if (VaultBrowserPolicy.isReadOnlyAttachmentPath(folder.relativePath)) {
-                        vaultRow(R.drawable.ic_browser_folder, folder.name, ui("只读附件目录"), ui("文件夹"), grouped = true) {
+                        vaultRow(R.drawable.ic_browser_folder, folder.name, ui("附件目录"), ui("文件夹"), grouped = true) {
                             openDirectory(folder)
                         }
                     } else {
@@ -692,7 +692,20 @@ class MainActivity : Activity() {
                         else -> R.drawable.ic_browser_file
                     }
                     val metadata = listOfNotNull(type, file.size?.takeIf { it >= 0L }?.let(::formatBytes)).joinToString(" · ")
-                    vaultRow(icon, file.name, metadata, type, grouped = true) { openVaultFile(file) }
+                    val deletable = VaultBrowserPolicy.canPermanentlyDeleteAttachment(
+                        file.relativePath, file.name, file.mimeType, repository.isDirectory(file)
+                    )
+                    if (deletable) {
+                        vaultRow(
+                            icon, file.name, metadata, type,
+                            trailingAccessibilityLabel = "永久删除 ${file.name}",
+                            trailingIcon = R.drawable.ic_note_delete,
+                            trailingAction = { confirmDirectAssetDelete(file) },
+                            grouped = true
+                        ) { openVaultFile(file) }
+                    } else {
+                        vaultRow(icon, file.name, metadata, type, grouped = true) { openVaultFile(file) }
+                    }
                 }), matchWrap())
             }
         }
@@ -3424,21 +3437,48 @@ class MainActivity : Activity() {
 
     private fun showMediaActions(kind: String, rawDestination: String, mediaToken: String) {
         val title = if (kind == "video") ui("视频操作") else ui("图片操作")
+        val actionGeneration = editorGeneration
         AlertDialog.Builder(dialogContext())
             .setTitle(title)
-            .setMessage(ui("正文会先保存；确认没有其他笔记引用后，将永久删除这个附件文件。无法安全确认时文件会保留。"))
             .setNegativeButton(ui("取消"), null)
-            .setPositiveButton(ui("删除引用和附件")) { _, _ ->
-                if (saveCoordinator.hasUnsavedChanges || saveCoordinator.hasInFlightSave) {
+            .setItems(arrayOf(
+                ui("仅从正文删除（保留附件）"),
+                ui("删除正文引用并永久删除附件")
+            )) { _, which ->
+                if (screen != Screen.EDITOR || actionGeneration != editorGeneration) {
+                    toast("笔记上下文已变化，请重新长按媒体")
+                } else if (saveCoordinator.hasUnsavedChanges || saveCoordinator.hasInFlightSave) {
                     toast("请等待当前正文保存完成后再删除附件")
                 } else {
                     handler.removeCallbacks(autosave)
                     webView?.isEnabled = false
                     formatActions.values.forEach { it.isEnabled = false }
-                    prepareInlineAttachmentDelete(rawDestination, mediaToken)
+                    if (which == 0) removeInlineReferenceOnly(mediaToken, rawDestination)
+                    else prepareInlineAttachmentDelete(rawDestination, mediaToken)
                 }
             }
             .show()
+    }
+
+    private fun removeInlineReferenceOnly(mediaToken: String, rawDestination: String) {
+        val editor = webView ?: return
+        val generation = editorGeneration
+        editor.evaluateJavascript(
+            "window.markbook && window.markbook.removeExpectedMedia ? window.markbook.removeExpectedMedia(" +
+                org.json.JSONObject.quote(mediaToken) + "," + org.json.JSONObject.quote(rawDestination) + ") : false"
+        ) { value ->
+            editor.isEnabled = true
+            formatActions.values.forEach { it.isEnabled = true }
+            if (value != "true" || screen != Screen.EDITOR || generation != editorGeneration) {
+                toast("正文媒体已变化，未执行删除")
+                return@evaluateJavascript
+            }
+            saveCoordinator.markEdited()
+            updateSaveStatus()
+            handler.removeCallbacks(autosave)
+            handler.postDelayed(autosave, AUTOSAVE_DELAY_MS)
+            toast("已从正文删除，附件文件已保留")
+        }
     }
 
     private fun prepareInlineAttachmentDelete(rawDestination: String, mediaToken: String) {
@@ -4012,6 +4052,53 @@ class MainActivity : Activity() {
             toast(ui("无法打开此文件，请安装支持该格式的查看器。"))
         } catch (_: SecurityException) {
             toast(ui("无法打开此文件，请安装支持该格式的查看器。"))
+        }
+    }
+
+    private fun confirmDirectAssetDelete(document: VaultDocument) {
+        if (browserMutationPending) return
+        dialogBuilder()
+            .setTitle("永久删除附件？")
+            .setMessage("将永久删除“${document.name}”，此操作不可撤销。若任何 Markdown 仍引用它，或无法安全确认，文件会保留；不会删除同目录的其他文件。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("永久删除") { _, _ -> runDirectAssetDelete(document) }
+            .show()
+    }
+
+    private fun runDirectAssetDelete(document: VaultDocument) {
+        browserMutationPending = true
+        val generation = browserLoadGeneration
+        structuralIoExecutor.execute {
+            val vaultId = repository.savedVaultUri()?.toString().orEmpty()
+            val lease = VaultMutationLease.tryAcquire(vaultId, VaultMutationLease.Kind.STRUCTURAL)
+            val result: Any = if (lease == null) {
+                DirectAssetDeletePrepareResult.Rejected("当前 Vault 正在同步，请完成后重试")
+            } else try {
+                when (val prepared = repository.prepareDirectAssetDelete(document)) {
+                    is DirectAssetDeletePrepareResult.Rejected -> prepared
+                    is DirectAssetDeletePrepareResult.Ready -> repository.commitDirectAssetDelete(prepared.request)
+                }
+            } finally {
+                if (lease != null) VaultMutationLease.release(lease)
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed || screen != Screen.BROWSER || generation != browserLoadGeneration) return@runOnUiThread
+                browserMutationPending = false
+                when (result) {
+                    is DirectAssetDeletePrepareResult.Rejected -> {
+                        browserMutationMessage = result.message
+                        browserSnapshot?.let { renderVaultBrowser(it.rootDirectory, it.directoryReadable, it.children, it.previews) }
+                    }
+                    InlineAttachmentDeleteResult.Deleted -> {
+                        browserMutationMessage = "附件已永久删除"
+                        renderBrowserAfterConfirmedMove(document)
+                    }
+                    is InlineAttachmentDeleteResult.Retained -> {
+                        browserMutationMessage = result.message
+                        browserSnapshot?.let { renderVaultBrowser(it.rootDirectory, it.directoryReadable, it.children, it.previews) }
+                    }
+                }
+            }
         }
     }
 

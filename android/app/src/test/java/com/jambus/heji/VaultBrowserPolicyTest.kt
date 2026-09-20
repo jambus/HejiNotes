@@ -32,4 +32,14 @@ class VaultBrowserPolicyTest {
         assertEquals(VaultBrowserPolicy.FileKind.VIDEO, VaultBrowserPolicy.fileKind("capture", "video/3gpp"))
         assertEquals(VaultBrowserPolicy.FileKind.OTHER, VaultBrowserPolicy.fileKind("manual.pdf", "application/pdf"))
     }
+
+    @Test
+    fun `only image and video files inside attachment trees are directly deletable`() {
+        assertTrue(VaultBrowserPolicy.canPermanentlyDeleteAttachment("assets/note/photo.jpg", "photo.jpg", "image/jpeg", false))
+        assertTrue(VaultBrowserPolicy.canPermanentlyDeleteAttachment("Projects/attachments/clip.mp4", "clip.mp4", "video/mp4", false))
+        assertFalse(VaultBrowserPolicy.canPermanentlyDeleteAttachment("Projects/photo.jpg", "photo.jpg", "image/jpeg", false))
+        assertFalse(VaultBrowserPolicy.canPermanentlyDeleteAttachment("assets/note/manual.pdf", "manual.pdf", "application/pdf", false))
+        assertFalse(VaultBrowserPolicy.canPermanentlyDeleteAttachment("assets/note/folder", "folder", null, true))
+        assertFalse(VaultBrowserPolicy.canPermanentlyDeleteAttachment(".markbook/assets/photo.jpg", "photo.jpg", "image/jpeg", false))
+    }
 }

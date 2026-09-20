@@ -19,6 +19,14 @@ object VaultBrowserPolicy {
     fun isReadOnlyAttachmentPath(relativePath: String): Boolean =
         pathSegments(relativePath).any { it in readOnlyAttachmentSegments }
 
+    fun canPermanentlyDeleteAttachment(
+        relativePath: String,
+        name: String,
+        mimeType: String?,
+        isDirectory: Boolean
+    ): Boolean = !isDirectory && !isHidden(relativePath) && isReadOnlyAttachmentPath(relativePath) &&
+        fileKind(name, mimeType) in setOf(FileKind.IMAGE, FileKind.VIDEO)
+
     fun fileKind(name: String, mimeType: String?): FileKind {
         val mime = mimeType.orEmpty().lowercase(Locale.ROOT)
         val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
