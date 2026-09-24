@@ -21,6 +21,18 @@
 - `cursor`: Provider opaque 增量游标；客户端不得解析或修改。
 - `completedAt`
 
+## DriveVaultBinding（设备本地非秘密元数据）
+
+- `vaultId`：稳定的本地 Vault 授权身份；Android 使用已持久化的 SAF tree URI 字符串。
+- `accountId`：Google 系统账号身份，用于检测当前授权账号是否仍与绑定一致；不是访问令牌。
+- `remoteRootId`、`remoteRootName`：Drive 根目录的 opaque ID 与用户可读名称。
+- `lastSuccessAt`：该 Vault/account/root 三元组最近一次完整成功时间。
+
+每个 Vault 最多一个绑定；更新或清除 B 不得修改 A。账号不匹配时保留绑定并呈现重新登录，
+不得降级为未连接或静默改绑。访问令牌不属于该模型。Android 旧版全局标量只迁移到旧数据中
+明确记录的 `vaultId`，迁移与重复读取幂等；同步在任何令牌获取或 Drive API 访问前重新验证当前
+Vault、当前授权账号和 root ID/名称。
+
 ## SyncOperation
 
 - `type`: upload、download、delete-local、delete-remote、keep-both。

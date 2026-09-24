@@ -932,14 +932,15 @@ class MainActivity : Activity() {
         sectionLabel(content, ui("同步"))
         val vaultId = repository.savedVaultUri()?.toString().orEmpty()
         val accountId = driveAuth.currentAccount()?.email.orEmpty()
-        val driveRoot = drivePreferences.root(vaultId, accountId)
+        val driveBinding = drivePreferences.binding(vaultId)
+        val driveRoot = driveBinding?.root
         val syncSnapshot = currentSyncSnapshot()
         val driveStatus = when {
             syncSnapshot?.isRunning == true -> getString(R.string.drive_status_running, driveRoot?.name ?: syncSnapshot.targetName, syncSnapshot.statusLabel(this))
-            driveRoot == null -> getString(R.string.drive_status_disconnected)
-            !driveAuth.isAuthorized(driveAuth.currentAccount()) -> getString(R.string.drive_status_sign_in, driveRoot.name)
-            drivePreferences.lastSuccessAt(vaultId, driveRoot.id, accountId) > 0L -> getString(R.string.drive_status_last_sync, driveRoot.name, formatSyncTime(drivePreferences.lastSuccessAt(vaultId, driveRoot.id, accountId)))
-            else -> getString(R.string.drive_status_selected, driveRoot.name)
+            driveBinding == null -> getString(R.string.drive_status_disconnected)
+            !driveAuth.isAuthorized(driveAuth.currentAccount()) || driveBinding.accountId != accountId -> getString(R.string.drive_status_sign_in, driveBinding.root.name)
+            drivePreferences.lastSuccessAt(vaultId, driveBinding.root.id, accountId) > 0L -> getString(R.string.drive_status_last_sync, driveBinding.root.name, formatSyncTime(drivePreferences.lastSuccessAt(vaultId, driveBinding.root.id, accountId)))
+            else -> getString(R.string.drive_status_selected, driveBinding.root.name)
         }
         content.addView(settingsRow("Google Drive", driveStatus, false) { showDriveSetup() }, matchWrap())
         syncSnapshot?.let { snapshot ->
@@ -1206,12 +1207,20 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(10), dp(16), dp(24))
         }
         message?.let { content.addView(infoBanner(it), matchWrap().apply { bottomMargin = dp(12) }) }
+        val vaultId = repository.savedVaultUri()?.toString().orEmpty()
+        val binding = drivePreferences.binding(vaultId)
         val account = driveAuth.currentAccount()
-        if (!driveAuth.isAuthorized(account)) {
-            content.addView(emptyState("连接 Google 账号后，才能选择用于电脑 Obsidian 的 Drive Vault。"), matchWrap().apply {
+        val accountMatches = driveAuth.isAuthorized(account) && account?.email == binding?.accountId
+        if (!driveAuth.isAuthorized(account) || (binding != null && !accountMatches)) {
+            val detail = if (binding == null) {
+                "连接 Google 账号后，才能选择用于电脑 Obsidian 的 Drive Vault。"
+            } else {
+                getString(R.string.drive_binding_mismatch_detail, binding.root.name, binding.accountId)
+            }
+            content.addView(emptyState(detail), matchWrap().apply {
                 bottomMargin = dp(14)
             })
-            content.addView(action("连接 Google Drive", true) {
+            content.addView(action(getString(if (binding == null) R.string.drive_connect_action else R.string.drive_relogin_action), true) {
                 startActivityForResult(driveAuth.signInIntent(), DRIVE_SIGN_IN_REQUEST)
             }, matchWrap())
         } else {
@@ -1221,7 +1230,7 @@ class MainActivity : Activity() {
                 setTextColor(COLOR_SECONDARY_TEXT)
                 setPadding(dp(6), dp(2), dp(6), dp(14))
             }, matchWrap())
-            val selectedRoot = drivePreferences.root(repository.savedVaultUri()?.toString().orEmpty(), driveAuth.currentAccount()?.email.orEmpty())
+            val selectedRoot = drivePreferences.root(vaultId, account?.email.orEmpty())
             content.addView(settingsRow(
                 "Drive Vault",
                 selectedRoot?.name ?: "尚未选择远端文件夹",
@@ -1259,7 +1268,7 @@ class MainActivity : Activity() {
 
     private fun showDriveFolderPicker(reset: Boolean = false) {
         if (!driveAuth.isAuthorized(driveAuth.currentAccount())) {
-            showDriveSetup("Google 账号需要重新登录")
+            showDriveSetup(getString(R.string.drive_account_relogin_required))
             return
         }
         if (reset) {
@@ -1412,7 +1421,7 @@ class MainActivity : Activity() {
     private fun createDriveFolder(name: String) {
         val location = driveFolderDirectory
         val account = driveAuth.currentAccount() ?: run {
-            showDriveSetup("Google 账号需要重新登录")
+            showDriveSetup(getString(R.string.drive_account_relogin_required))
             return
         }
         drivePickerFolders = null
@@ -1480,7 +1489,7 @@ class MainActivity : Activity() {
     private fun startDriveSync(rootSelection: DriveVaultRoot) {
         val account = driveAuth.currentAccount()
         if (!driveAuth.isAuthorized(account) || account == null) {
-            showDriveSetup("Google 账号需要重新登录")
+            showDriveSetup(getString(R.string.drive_account_relogin_required))
             return
         }
         val vaultUri = repository.savedVaultUri()?.toString()
@@ -1488,7 +1497,12 @@ class MainActivity : Activity() {
             showDriveSetup("无法访问本地 Vault，请重新选择后再同步")
             return
         }
-        BackgroundSyncService.startGoogleDrive(this, rootSelection, vaultUri)
+        val binding = drivePreferences.binding(vaultUri)
+        if (binding == null || binding.accountId != account.email || binding.root.id != rootSelection.id) {
+            showDriveSetup(getString(R.string.drive_sync_tuple_changed))
+            return
+        }
+        BackgroundSyncService.startGoogleDrive(this, rootSelection, vaultUri, account.email.orEmpty())
         showDriveSetup("同步已在后台开始。你可以继续编辑本地文件；完成或失败时会通知你。")
     }
 

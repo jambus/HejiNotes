@@ -45,3 +45,5 @@
 - [ ] T323 Android：为 Google Drive 实现建立到 `SyncProvider`、`SyncPlanner`、`SyncEngine`
   的适配边界和共享测试样例；迁移期间保持当前本地 `.trash/` 排除、普通删除不传播、条件写入、
   MoveBundle 与冲突保留语义，未完成前不得声称支持 OneDrive/S3/WebDAV。
+- [x] T324 Android：按稳定 Vault URI 隔离 Google Drive 账号/root/名称/上次成功元数据；保留账号
+  不匹配绑定并要求重新登录，同步启动前重验 Vault/账号/root，覆盖 A/B 隔离和旧标量幂等迁移。

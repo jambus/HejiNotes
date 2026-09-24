@@ -19,6 +19,8 @@ CameraPicker 和平台安全存储。现有 HAP 实现作为基础，但交付�
    因不支持的资源 override API 暂不提供，且不改变 Vault 行为。
 9. 将冷启动笔记枚举改为异步元数据/摘要管线，全文延迟到编辑或索引更新；长列表采用
    `LazyForEach` 与数据源复用，并在 HarmonyOS 5/6 真机记录大 Vault 启动与滚动证据。
+10. 对齐按稳定 Vault 身份隔离的每日笔记目录和重置提示；HAP 尚未实现此轮 Android 的
+    Google Drive 绑定，不得用全局标量作为临时跨 Vault 行为。
 
 ## Constitution Check
 

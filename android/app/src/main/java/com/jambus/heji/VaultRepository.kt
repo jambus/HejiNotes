@@ -627,6 +627,7 @@ sealed class InlineAttachmentDeleteResult {
 class VaultRepository(private val context: Context, private val fixedVaultUri: Uri? = null) : NoteReadWriter {
     private val resolver: ContentResolver = context.contentResolver
     private val preferences = context.getSharedPreferences("heji_notes", Context.MODE_PRIVATE)
+    private val dailySettings = VaultDailySettingsStore(SharedPreferenceStore(preferences))
 
     fun savedVaultUri(): Uri? = fixedVaultUri ?: preferences.getString(VAULT_URI_KEY, null)?.let(Uri::parse)
 
@@ -658,10 +659,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         preferences.edit().putBoolean(SWIPE_DISCOVERY_HINT_SEEN_KEY, true).apply()
     }
 
-    fun dailyNoteDirectoryPath(): String = preferences.getString(
-        DAILY_NOTE_DIRECTORY_KEY,
-        DEFAULT_DAILY_NOTE_DIRECTORY
-    ) ?: DEFAULT_DAILY_NOTE_DIRECTORY
+    fun dailyNoteDirectoryPath(): String = dailySettings.get(savedVaultUri()?.toString().orEmpty()).directory
 
     fun dailyNoteDirectoryParts(): List<String> = dailyNoteDirectoryPath()
         .split('/')
@@ -671,13 +669,11 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
     fun setDailyNoteDirectory(parts: List<String>) {
         val cleanParts = parts.map { it.trim() }
             .filter { it.isNotEmpty() && it != "." && it != ".." }
-        preferences.edit()
-            .putString(DAILY_NOTE_DIRECTORY_KEY, cleanParts.joinToString("/"))
-            .remove(DAILY_DIRECTORY_RESET_NOTICE_KEY)
-            .apply()
+        dailySettings.set(savedVaultUri()?.toString().orEmpty(), cleanParts.joinToString("/"))
     }
 
-    fun dailyDirectoryResetNotice(): Boolean = preferences.getBoolean(DAILY_DIRECTORY_RESET_NOTICE_KEY, false)
+    fun dailyDirectoryResetNotice(): Boolean =
+        dailySettings.get(savedVaultUri()?.toString().orEmpty()).resetNotice
 
     fun vaultRoot(): VaultDocument? {
         val tree = savedVaultUri() ?: return null
@@ -2120,7 +2116,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         val current = dailyNoteDirectoryPath()
         val rewritten = VaultRelativePath.renamedDailyDirectory(current, oldPath, newPath)
         if (rewritten == current) return DailyDirectoryChange.UNCHANGED
-        preferences.edit().putString(DAILY_NOTE_DIRECTORY_KEY, rewritten).commit()
+        dailySettings.rewrite(savedVaultUri()?.toString().orEmpty(), rewritten)
         return DailyDirectoryChange.REWRITTEN
     }
 
@@ -2128,8 +2124,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         val current = dailyNoteDirectoryPath()
         val reset = VaultRelativePath.resetIfRemoved(current, removedPath)
         if (reset == current) return DailyDirectoryChange.UNCHANGED
-        preferences.edit().putString(DAILY_NOTE_DIRECTORY_KEY, reset)
-            .putBoolean(DAILY_DIRECTORY_RESET_NOTICE_KEY, true).commit()
+        dailySettings.resetToRoot(savedVaultUri()?.toString().orEmpty())
         return DailyDirectoryChange.RESET_TO_ROOT
     }
 
@@ -2575,8 +2570,6 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         private const val VAULT_URI_KEY = "vault_uri"
         private const val APPEARANCE_MODE_KEY = "appearance_mode"
         private const val SWIPE_DISCOVERY_HINT_SEEN_KEY = "swipe_discovery_hint_seen"
-        private const val DAILY_NOTE_DIRECTORY_KEY = "daily_note_directory"
-        private const val DAILY_DIRECTORY_RESET_NOTICE_KEY = "daily_note_directory_reset_notice"
         private const val PENDING_VIDEO_NOTE_URI = "pending_video_note_uri"
         private const val PENDING_VIDEO_NOTE_PATH = "pending_video_note_path"
         private const val PENDING_VIDEO_HASH = "pending_video_hash"
@@ -2585,7 +2578,6 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         private const val PENDING_VIDEO_CACHE = "pending_video_cache"
         private const val PENDING_VIDEO_STAGE = "pending_video_stage"
         private const val PENDING_VIDEO_ATTACHMENT_PATH = "pending_video_attachment_path"
-        private const val DEFAULT_DAILY_NOTE_DIRECTORY = "Daily Notes"
         const val APPEARANCE_DAY = "day"
         const val APPEARANCE_NIGHT = "night"
         private const val MAX_PHOTO_NAME_ATTEMPTS = 32

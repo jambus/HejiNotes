@@ -22,6 +22,10 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
 
 ### 本次改动
 
+- Android 的每日笔记目录/重置提示和 Google Drive 账号/root/上次成功元数据现在按已保存 Vault
+  独立保留；切换两个 Vault 不再互相覆盖。账号不匹配会保留原绑定并要求重新登录，后台同步开始前
+  再次核对当前 Vault、账号和远端根目录。旧全局配置采用定向、幂等迁移。
+
 - Android 主文件库现在显示 Vault 的 `assets` / `attachments` 目录，可逐层浏览其中的图片、
   视频和其他附件。
 - 附件行显示文件名、类型和 Provider 可用时的文件大小；点击后交给系统查看器打开，无匹配
@@ -39,7 +43,8 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
 
 ### 当前验证
 
-- Android 186 项本地单元测试通过，`0 failure / 0 error / 0 skip`。
+- Android 191 项本地单元测试通过，`0 failure / 0 error / 0 skip`；新增覆盖双 Vault 每日目录、
+  Drive 绑定、旧配置迁移和同步启动 tuple 拒绝策略。
 - `0.5.2` fresh debug APK 已成功构建；Mate 60 上的逐层浏览、系统图片/视频/其他文件查看器、
   无匹配查看器反馈、深浅色、字体放大和 TalkBack 仍待验收，因此本版本不是候选或正式发布。
 

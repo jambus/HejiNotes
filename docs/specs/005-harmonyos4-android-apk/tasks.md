@@ -107,7 +107,11 @@
   删除入口和独立 `DIRECT_CONFIRMED` 事务，补充引用、不可读、外变、恢复和入口边界测试（FR-535）。
 - [ ] T564 Mate 60：验证正文两种删除选择、assets 图片/视频直接删除、引用拒绝、取消、TalkBack、
   旋转、中断恢复、同步占用和列表上下文保留（FR-535）。
+- [x] T565 Android：按稳定 Vault URI 隔离每日目录/重置提示及 Google Drive 绑定/上次成功时间；
+  保守迁移旧值，保留账号不匹配绑定并在同步启动前重验 tuple，补充纯 JVM 隔离与迁移测试。
+- [ ] T566 Mate 60：以两个 SAF Vault 验证每日目录、持续提示、Drive 绑定和上次成功状态互不串用，
+  并验证切换账号、重新登录、进程重启及同步启动前变更配置的拒绝路径。
 
 上一个 `0.5.0` / `versionCode 9` 基线已在本机通过共享 Vault 契约检查与 debug APK 构建。
-当前 `0.5.2` / `versionCode 11` 源码已在 T563 变更后通过 186 项 Android 单测和 fresh debug
+当前 `0.5.2` / `versionCode 11` 源码已在 T565 变更后通过 191 项 Android 单测和 fresh debug
 APK 打包；Mate 60 真机安装与验收仍未完成。

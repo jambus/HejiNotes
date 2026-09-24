@@ -26,6 +26,15 @@
     <string name="drive_status_last_sync">%1$s · Last synced %2$s</string>
     <string name="drive_status_selected">Selected %1$s</string>
     <string name="drive_status_disconnected">Not connected</string>
+    <string name="drive_binding_mismatch_detail">This Vault is still linked to %1$s (%2$s). Sign in to that account again; the existing link will be kept.</string>
+    <string name="drive_connect_action">Connect Google Drive</string>
+    <string name="drive_relogin_action">Sign in to Google Drive again</string>
+    <string name="drive_account_relogin_required">Sign in to the linked Google account again</string>
+    <string name="drive_sync_selection_missing">No Google Drive Vault is selected</string>
+    <string name="drive_sync_tuple_changed">The current Vault, Google account, or remote folder changed. Sign in or confirm the selection again.</string>
+    <string name="drive_sync_vault_busy">This Vault is moving files. Try syncing again when it finishes.</string>
+    <string name="drive_sync_connection_failed">Could not connect to Google Drive. Check the network or sign in again.</string>
+    <string name="drive_target_unselected">No remote Vault selected</string>
     <string name="sync_details">%1$s: %2$s\nStarted: %3$s\n%4$s%5$s\n\nProgress %6$d / %7$d\nUploaded %8$d · Downloaded %9$d · Unchanged %10$d · Conflicts %11$d.\n\nYou can continue editing local files during sync; the next sync compares changes saved afterward.</string>
     <string name="sync_finished_prefix">Finished: %1$s\n</string>
     <string name="sync_errors_heading">Items needing attention:</string>

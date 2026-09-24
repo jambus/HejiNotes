@@ -88,6 +88,22 @@ If a provider reports successful rename but its actual name cannot be resolved,
 the client resets an affected daily-note directory to the Vault root rather
 than retaining a stale or requested-only path.
 
+Daily-note directory selection and its reset-warning acknowledgement are
+device-local settings scoped by the stable saved Vault authorization identity
+(the persisted SAF tree URI on Android). They are never written into the Vault.
+An unseen Vault defaults to `Daily Notes`; rename/reset processing for one Vault
+must not modify another Vault's path or warning state. Legacy unscoped Android
+daily settings migrate once, idempotently, only into the Vault saved when the
+migration runs.
+
+Remote account and root bindings are also device-local metadata, not Vault
+content. Each Vault identity owns an independent binding containing provider
+account identity, opaque remote root ID, display name, and last successful sync
+time. An account mismatch retains this binding and requires re-authentication;
+it is not equivalent to disconnection. Legacy unscoped Android Drive metadata
+migrates idempotently only to the legacy-recorded Vault. A sync run must
+revalidate the current Vault/account/root tuple before remote access.
+
 ## Recovery and Conflicts
 
 Temporary files and transaction markers are prefixed with `.markbook-` and must

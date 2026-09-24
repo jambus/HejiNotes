@@ -11,6 +11,53 @@ import android.os.IBinder
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
+internal data class DriveSyncStartRequest(
+    val vaultId: String,
+    val accountId: String,
+    val root: DriveVaultRoot
+)
+
+internal data class DriveSyncStartContext(
+    val currentVaultId: String?,
+    val binding: DriveVaultBinding?,
+    val currentAccountId: String?,
+    val authorized: Boolean
+)
+
+internal enum class DriveSyncStartRejection {
+    MISSING_SELECTION,
+    VAULT_MISMATCH,
+    MISSING_BINDING,
+    BINDING_ACCOUNT_MISMATCH,
+    ROOT_ID_MISMATCH,
+    ROOT_NAME_MISMATCH,
+    CURRENT_ACCOUNT_MISMATCH,
+    UNAUTHORIZED
+}
+
+internal sealed class DriveSyncStartDecision {
+    object Accepted : DriveSyncStartDecision()
+    data class Rejected(val reason: DriveSyncStartRejection) : DriveSyncStartDecision()
+}
+
+internal object DriveSyncStartPolicy {
+    fun validate(request: DriveSyncStartRequest?, context: DriveSyncStartContext): DriveSyncStartDecision {
+        if (request == null || request.vaultId.isBlank() || request.accountId.isBlank() || request.root.id.isBlank()) {
+            return DriveSyncStartDecision.Rejected(DriveSyncStartRejection.MISSING_SELECTION)
+        }
+        if (context.currentVaultId != request.vaultId) return rejected(DriveSyncStartRejection.VAULT_MISMATCH)
+        val binding = context.binding ?: return rejected(DriveSyncStartRejection.MISSING_BINDING)
+        if (binding.accountId != request.accountId) return rejected(DriveSyncStartRejection.BINDING_ACCOUNT_MISMATCH)
+        if (binding.root.id != request.root.id) return rejected(DriveSyncStartRejection.ROOT_ID_MISMATCH)
+        if (binding.root.name != request.root.name) return rejected(DriveSyncStartRejection.ROOT_NAME_MISMATCH)
+        if (context.currentAccountId != request.accountId) return rejected(DriveSyncStartRejection.CURRENT_ACCOUNT_MISMATCH)
+        if (!context.authorized) return rejected(DriveSyncStartRejection.UNAUTHORIZED)
+        return DriveSyncStartDecision.Accepted
+    }
+
+    private fun rejected(reason: DriveSyncStartRejection) = DriveSyncStartDecision.Rejected(reason)
+}
+
 /** Owns a sync run independently of a settings or editor Activity. */
 class BackgroundSyncService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
@@ -50,20 +97,37 @@ class BackgroundSyncService : Service() {
     private fun startGoogleDriveSync(startId: Int, intent: Intent) {
         val rootId = intent.getStringExtra(EXTRA_ROOT_ID)
         val rootName = intent.getStringExtra(EXTRA_ROOT_NAME)
+        val expectedAccountId = intent.getStringExtra(EXTRA_ACCOUNT_ID)
         val vault = intent.getStringExtra(EXTRA_VAULT_URI)?.let(android.net.Uri::parse)
-        if (rootId == null || rootName == null || vault == null) {
-            recordStartFailure("尚未选择 Google Drive Vault")
+        val request = if (rootId != null && rootName != null && expectedAccountId != null && vault != null) {
+            DriveSyncStartRequest(vault.toString(), expectedAccountId, DriveVaultRoot(rootId, rootName))
+        } else null
+        if (request == null) {
+            recordStartFailure(getString(R.string.drive_sync_selection_missing), vault?.toString().orEmpty(), rootName.orEmpty())
             stopSelf(startId)
             return
         }
-        val lease = VaultMutationLease.tryAcquire(vault.toString(), VaultMutationLease.Kind.SYNC)
+        val auth = GoogleDriveAuth(this)
+        val account = auth.currentAccount()
+        val decision = DriveSyncStartPolicy.validate(request, DriveSyncStartContext(
+            VaultRepository(this).savedVaultUri()?.toString(),
+            DriveSyncPreferences(this).binding(request.vaultId),
+            account?.email,
+            auth.isAuthorized(account)
+        ))
+        if (decision is DriveSyncStartDecision.Rejected) {
+            recordStartFailure(getString(R.string.drive_sync_tuple_changed), request.vaultId, request.root.name)
+            stopSelf(startId)
+            return
+        }
+        val lease = VaultMutationLease.tryAcquire(request.vaultId, VaultMutationLease.Kind.SYNC)
         if (lease == null) {
-            recordStartFailure("当前 Vault 正在移动文件，请完成后重试同步")
+            recordStartFailure(getString(R.string.drive_sync_vault_busy), request.vaultId, request.root.name)
             stopSelf(startId)
             return
         }
-        val root = DriveVaultRoot(rootId, rootName)
-        val started = stateStore.begin(GOOGLE_DRIVE_PROVIDER, "Google Drive", root.name, vault.toString())
+        val root = request.root
+        val started = stateStore.begin(GOOGLE_DRIVE_PROVIDER, "Google Drive", root.name, request.vaultId)
         if (started == null) {
             VaultMutationLease.release(lease)
             stateStore.snapshot()?.let(::showOngoingNotification)
@@ -73,9 +137,9 @@ class BackgroundSyncService : Service() {
         showOngoingNotification(started)
         executor.execute {
             try {
-                val result = runGoogleDriveSync(root, vault)
+                val result = runGoogleDriveSync(request)
                 val final = stateStore.finish(result) ?: return@execute
-                if (final.status == SyncTaskStatus.SUCCEEDED) DriveSyncPreferences(this).markSuccessful(vault.toString(), root.id, authAccountId())
+                if (final.status == SyncTaskStatus.SUCCEEDED) DriveSyncPreferences(this).markSuccessful(request.vaultId, root.id, request.accountId)
                 stopForeground(false)
                 showFinishedNotification(final)
                 stopSelf()
@@ -85,32 +149,37 @@ class BackgroundSyncService : Service() {
         }
     }
 
-    private fun runGoogleDriveSync(root: DriveVaultRoot, vault: android.net.Uri): DriveSyncResult = try {
+    private fun runGoogleDriveSync(request: DriveSyncStartRequest): DriveSyncResult = try {
         val auth = GoogleDriveAuth(this)
         val account = auth.currentAccount()
-        if (!auth.isAuthorized(account) || account == null) {
-            DriveSyncResult(0, 0, 0, 0, listOf("Google 账号需要重新登录"), false)
+        val decision = DriveSyncStartPolicy.validate(request, DriveSyncStartContext(
+            VaultRepository(this).savedVaultUri()?.toString(),
+            DriveSyncPreferences(this).binding(request.vaultId),
+            account?.email,
+            auth.isAuthorized(account)
+        ))
+        if (decision is DriveSyncStartDecision.Rejected || account == null) {
+            DriveSyncResult(0, 0, 0, 0, listOf(getString(R.string.drive_account_relogin_required)), false)
         } else {
             GoogleDriveSyncService(
-                VaultRepository(this, vault),
+                VaultRepository(this, android.net.Uri.parse(request.vaultId)),
                 GoogleDriveApi(auth.accessToken(account)),
-                vault.toString(),
-                account.email.orEmpty(),
+                request.vaultId,
+                request.accountId,
                 LocalChangeJournal(this),
                 LocalDriveSyncBaselineStore(this),
                 cancellation
             ) { progress ->
                 stateStore.updateProgress(progress)?.let(::showOngoingNotification)
-            }.sync(root)
+            }.sync(request.root)
         }
     } catch (_: Exception) {
-        DriveSyncResult(0, 0, 0, 0, listOf("无法连接 Google Drive，请检查网络或重新登录"), false)
+        DriveSyncResult(0, 0, 0, 0, listOf(getString(R.string.drive_sync_connection_failed)), false)
     }
 
-    private fun authAccountId(): String = GoogleDriveAuth(this).currentAccount()?.email.orEmpty()
-
-    private fun recordStartFailure(message: String) {
-        val started = stateStore.begin(GOOGLE_DRIVE_PROVIDER, "Google Drive", "未选择远端 Vault") ?: return
+    private fun recordStartFailure(message: String, vaultId: String = "", targetName: String = "") {
+        val target = targetName.ifBlank { getString(R.string.drive_target_unselected) }
+        val started = stateStore.begin(GOOGLE_DRIVE_PROVIDER, "Google Drive", target, vaultId) ?: return
         val final = stateStore.finish(DriveSyncResult(0, 0, 0, 0, listOf(message), false)) ?: started
         showFinishedNotification(final)
     }
@@ -171,12 +240,14 @@ class BackgroundSyncService : Service() {
         private const val ACTION_CANCEL = "com.jambus.heji.action.CANCEL_SYNC"
         private const val EXTRA_ROOT_ID = "root_id"
         private const val EXTRA_ROOT_NAME = "root_name"
+        private const val EXTRA_ACCOUNT_ID = "account_id"
         private const val EXTRA_VAULT_URI = "vault_uri"
 
-        fun startGoogleDrive(context: Context, root: DriveVaultRoot, vaultUri: String) {
+        fun startGoogleDrive(context: Context, root: DriveVaultRoot, vaultUri: String, accountId: String) {
             val intent = Intent(context, BackgroundSyncService::class.java).setAction(ACTION_START_GOOGLE_DRIVE)
                 .putExtra(EXTRA_ROOT_ID, root.id)
                 .putExtra(EXTRA_ROOT_NAME, root.name)
+                .putExtra(EXTRA_ACCOUNT_ID, accountId)
                 .putExtra(EXTRA_VAULT_URI, vaultUri)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
         }

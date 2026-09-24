@@ -123,6 +123,10 @@ Mate 60 真机验收前，该版本不得标记为候选或正式发布。
   两种明确选择；前者不创建删除标记或修改附件。`assets` / `attachments` 浏览器中的图片和视频
   必须提供直接永久删除入口，使用独立 `DIRECT_CONFIRMED` 事务，仅在两次全 Vault 精确扫描无引用、
   文件身份未变化且严格确认删除结果时删除所选文件；其他文件、Markdown、目录和兄弟附件不删除。
+- **FR-536** Android 必须以已保存 SAF tree URI 作为稳定 Vault 身份，分别保存每日笔记目录、
+  目录重置提示和 Google Drive 账号/root/名称/上次成功元数据。旧每日目录仅迁移到迁移时当前
+  Vault，旧 Drive 标量仅迁移到其中记录的 Vault；迁移幂等。账号不匹配必须保留绑定并要求重新
+  登录；同步开始前重新验证当前 Vault、账号和 root，任何 Vault 的更新或清除不得影响其他 Vault。
 
 ## Out of Scope
 
