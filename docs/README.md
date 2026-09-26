@@ -11,6 +11,7 @@
 docs/
 ├── constitution.md                    # 不可协商的项目原则
 ├── RELEASE_NOTES.md                   # 版本范围、发布状态与迭代记录
+├── device-debugging.md                # Mate 60 设备连接与 APK 安装排障
 ├── contracts/
 │   └── vault-contract.md              # 跨客户端唯一文件与恢复契约
 ├── product/
