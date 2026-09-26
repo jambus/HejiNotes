@@ -15,3 +15,6 @@ Android APK 实现由规格 `005` 跟踪，HarmonyOS 5/6 HAP 实现由规格 `00
   不支持的目录移动、深度附件路径和每日目录失效恢复。
 - [ ] T409 建立视频链接（含空格）、`-v` 命名、MP4/3GP 元数据及不可读 Markdown 时保守恢复的共享 fixture。
 - [ ] T410 建立嵌套 assets 和笔记 bundle 移动 fixture，并在 APK、HAP、Obsidian 中验证。
+- [ ] T411 对齐 Android 任意 OneDrive 目录与 HAP app-folder 现状：两端分别记录授权范围、远端
+  root、账号类型和 Provider 绑定，不跨 Provider 复用基线；共享 Vault 文件布局、相对链接、冲突与
+  `.trash/` 排除语义保持一致。HAP 扩大权限或支持任意目录前须单独评审。

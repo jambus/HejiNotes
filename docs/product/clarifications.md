@@ -21,7 +21,9 @@
 
 ## 同步
 
-7. 已确认：Google Drive 优先，NAS 为可选同步目标；OneDrive 延后评估。
+7. 已确认：Google Drive 与 OneDrive 为 Android 优先支持的远端目标，NAS 后续实现。OneDrive
+   支持个人和组织 Microsoft 账号，使用委托 `Files.ReadWrite` 权限，让用户选择任意已有目录
+   作为 Obsidian Vault；不限制为应用专用目录。
 8. 已确认：NAS 目标为威联通 TS-251D 和极空间，协议待实机调研，不预先写死。
 9. 已确认：默认手动同步，可开启自动同步提示；离线恢复网络后先提示确认。
 10. 已确认：冲突保留两个版本，不静默覆盖；暂不做逐段合并。

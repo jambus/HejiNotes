@@ -21,14 +21,15 @@
 - `cursor`: Provider opaque 增量游标；客户端不得解析或修改。
 - `completedAt`
 
-## DriveVaultBinding（设备本地非秘密元数据）
+## RemoteVaultBinding（设备本地非秘密元数据）
 
 - `vaultId`：稳定的本地 Vault 授权身份；Android 使用已持久化的 SAF tree URI 字符串。
-- `accountId`：Google 系统账号身份，用于检测当前授权账号是否仍与绑定一致；不是访问令牌。
+- `providerId`：`google_drive` 或 `onedrive`；绑定和基线不可跨 Provider 复用。
+- `accountId`：Provider 返回的稳定账号身份，用于检测当前授权账号是否仍与绑定一致；不是访问令牌。
 - `remoteRootId`、`remoteRootName`：Drive 根目录的 opaque ID 与用户可读名称。
 - `lastSuccessAt`：该 Vault/account/root 三元组最近一次完整成功时间。
 
-每个 Vault 最多一个绑定；更新或清除 B 不得修改 A。账号不匹配时保留绑定并呈现重新登录，
+每个 Vault 每个 Provider 最多一个绑定；更新或清除 B 不得修改 A。账号不匹配时保留绑定并呈现重新登录，
 不得降级为未连接或静默改绑。访问令牌不属于该模型。Android 旧版全局标量只迁移到旧数据中
 明确记录的 `vaultId`，迁移与重复读取幂等；同步在任何令牌获取或 Drive API 访问前重新验证当前
 Vault、当前授权账号和 root ID/名称。
@@ -45,10 +46,13 @@ Vault、当前授权账号和 root ID/名称。
 - `changeId`、`vaultId`、`type`：平台无关的本地变化身份；搬运使用 `MoveBundle`。
 - `sourcePaths`、`targetPaths`：Vault POSIX 相对路径，不含 Provider 或账号信息。
 - `beforeFingerprints`、`afterFingerprints`：用于与上次成功基线和当前快照复核。
-- `committedAt`、`acknowledgedAt`：本地提交与完整同步确认时间。
+- `committedAt`、`acknowledgedProviders`：本地提交时间，以及已完整同步并确认该变化的 Provider ID
+  集合。一个 Provider 的确认不能删除另一个尚未确认的 `MoveBundle` 历史。
 
 本地事务完成后才追加变化；Provider 在规划阶段消费但不能改变其本地提交语义。
-只有成功提交新同步基线后才能确认变化。连续搬运可以按稳定文件身份合并目标路径。
+只有成功提交该 Provider 的新同步基线后才能把它加入确认集合。第二个 Provider 首次接入且没有
+源路径基线时，必须用 `beforeFingerprints` 验证旧远端源；不一致先保留冲突副本，缺失或不确定则
+失败关闭。连续搬运可以按稳定文件身份合并目标路径。
 
 ## SyncJobState
 

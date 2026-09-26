@@ -32,7 +32,7 @@ object UiText {
         "创建" to "Create", "新建笔记" to "New note", "新建文件夹" to "New folder",
         "选择 Vault" to "Choose Vault", "选择此目录" to "Use this folder", "上一级" to "Up",
         "知道了" to "Got it", "确认同步" to "Confirm sync", "开始同步" to "Start sync",
-        "Google Drive" to "Google Drive", "同步状态" to "Sync status",
+        "Google Drive" to "Google Drive", "OneDrive" to "OneDrive", "同步状态" to "Sync status",
         "请在应用内查看失败详情" to "See failure details in the app",
         "操作已展开" to "Actions expanded", "操作已收起" to "Actions collapsed",
         "同步详情" to "Sync details", "每日笔记" to "Daily notes", "今日笔记目录" to "Daily note folder",

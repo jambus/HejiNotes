@@ -97,12 +97,13 @@ daily settings migrate once, idempotently, only into the Vault saved when the
 migration runs.
 
 Remote account and root bindings are also device-local metadata, not Vault
-content. Each Vault identity owns an independent binding containing provider
+content. Each Vault identity owns an independent binding per provider containing provider
 account identity, opaque remote root ID, display name, and last successful sync
-time. An account mismatch retains this binding and requires re-authentication;
+time. Google Drive and OneDrive bindings and successful baselines must never be reused across
+providers. An account mismatch retains this binding and requires re-authentication;
 it is not equivalent to disconnection. Legacy unscoped Android Drive metadata
 migrates idempotently only to the legacy-recorded Vault. A sync run must
-revalidate the current Vault/account/root tuple before remote access.
+revalidate the current Vault/provider/account/root tuple before remote access.
 
 ## Recovery and Conflicts
 
@@ -202,5 +203,11 @@ successful baseline and local change history. It uploads and verifies all new
 paths before moving unchanged old remote paths into the provider recycle bin.
 Source paths belonging to an unacknowledged move are not treated as ordinary
 remote-only downloads. Remote changes after the baseline are preserved as
-conflicts. Only a fully successful comparison commits a new baseline and
-acknowledges local changes. General deletes do not propagate through this move rule.
+conflicts. Only a fully successful comparison commits a new baseline and acknowledges local changes
+for that specific provider. A `MoveBundle` remains available to every configured provider that has
+not yet acknowledged it; one provider must not consume another provider's move history. When a
+provider is first connected after the local move and therefore has no source baseline, it may adopt
+the move only by comparing the remote source with the recorded pre-move SHA-256. An unchanged source
+can enter that provider's recycle bin after the target is verified; a changed source is first
+preserved as local and remote conflict copies. Missing fingerprints or uncertain copies fail closed.
+General deletes do not propagate through this move rule.

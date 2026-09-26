@@ -15,6 +15,31 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
   构建记录后，才能标记为“已发布”。
 - 尚未完成的优化不写入“已实现功能”，统一关联到对应编号规格的未完成任务。
 
+## 0.6.0 — Android OneDrive 同步
+
+**状态**：开发基线，待真实 OneDrive 与 Mate 60 验收（非候选）
+**Android 安装包版本**：`versionName = 0.6.0`，`versionCode = 12`
+
+### 本次改动
+
+- Android 设置新增 OneDrive 连接、远端目录选择/创建、首次范围确认和后台手动同步。
+- 使用 MSAL 公共客户端授权与 Microsoft Graph `Files.ReadWrite` 委托权限；应用不保存客户端密钥，
+  令牌不进入普通偏好、Vault、同步状态或日志。
+- OneDrive 复用现有严格本地快照、冲突副本、Vault 租约、后台通知/详情、取消和 MoveBundle 规则；
+  Google Drive 与 OneDrive 的绑定、基线和最近成功时间按 Provider 与本地 Vault 隔离。
+- Graph adapter 支持目录列举/创建、流式下载、条件替换、复制、回收站删除、小文件直接上传和
+  大文件上传会话。传输缓存只在应用缓存目录短暂存在；正常完成、失败或取消时立即清理，进程
+  异常终止遗留的孤儿缓存会在下一次 OneDrive 同步访问远端前清理，清理失败则拒绝同步。
+
+### 当前验证
+
+- Android 200 项本地单元测试通过（`0 failure / 0 error / 0 skip`），包含 OneDrive Vault 绑定
+  隔离、Provider 分区 MoveBundle 确认、传输中取消、条件写入 header、启动 tuple 拒绝和 Graph
+  continuation/upload/download URL 信任边界；`0.6.0` fresh debug
+  APK 已成功构建。
+- 真实 Entra 应用配置、个人/组织账号登录、Mate 60 登录回调、大文件、弱网、授权撤销与双设备
+  冲突仍待验收，因此本版本不是候选或正式发布。
+
 ## 0.5.2 — 附件目录浏览
 
 **状态**：开发基线，待 Mate 60 真机验收（非候选）

@@ -54,6 +54,9 @@
     删除事务；直接事务以 `DIRECT_CONFIRMED` 为恢复起点，复用精确扫描和身份复核但不伪造笔记提交状态。
 28. 以已保存 SAF tree URI 分区每日笔记目录/重置提示和 Google Drive 非敏感绑定元数据；保守迁移
     旧全局值，账号不匹配保留绑定并要求重新登录，后台同步启动前重验完整绑定。
+29. Android 优先接入 OneDrive：使用 MSAL 管理公共客户端授权与令牌缓存，以 Microsoft Graph
+    adapter 复用现有分层同步引擎；在设置中增加独立绑定、目录选择和确认流程，并以 Provider
+    命名空间隔离绑定、基线和最近完成时间。
 
 ## Constitution Check
 

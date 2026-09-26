@@ -111,7 +111,12 @@
   保守迁移旧值，保留账号不匹配绑定并在同步启动前重验 tuple，补充纯 JVM 隔离与迁移测试。
 - [ ] T566 Mate 60：以两个 SAF Vault 验证每日目录、持续提示、Drive 绑定和上次成功状态互不串用，
   并验证切换账号、重新登录、进程重启及同步启动前变更配置的拒绝路径。
+- [x] T567 Android：实现 OneDrive MSAL 登录、Graph 目录选择/创建与统一后台双向同步；隔离
+  Provider/Vault/account/root 绑定和基线，补充 tuple、偏好、URL 信任、条件写入和取消策略自动化
+  测试；真实 Graph HTTP 行为仍由 T568 真机验收（FR-536）。
+- [ ] T568 Mate 60：配置真实 Entra 应用并验证个人/组织账户、登录回调、目录选择、大小文件、
+  后台继续/取消、令牌失效、冲突和中断恢复；完成前 `0.6.0` 不得标记候选（FR-536）。
 
 上一个 `0.5.0` / `versionCode 9` 基线已在本机通过共享 Vault 契约检查与 debug APK 构建。
-当前 `0.5.2` / `versionCode 11` 源码已在 T565 变更后通过 191 项 Android 单测和 fresh debug
-APK 打包；Mate 60 真机安装与验收仍未完成。
+当前 `0.6.0` / `versionCode 12` 已通过 200 项 Android 单测和 fresh debug APK 打包；完成 T568
+真实 OneDrive 与 Mate 60 验收后才能进入候选状态。

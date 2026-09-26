@@ -4,14 +4,14 @@
 **Priority**: P1
 **Depends on**: 001-local-markdown-notebook, 002-camera-attachments,
 004-harmony-4-5-compatibility
-**Current Baseline**: Android APK `0.5.2` development (`versionCode 11`)
+**Current Baseline**: Android APK `0.6.0` development (`versionCode 12`)
 
 ## Goal
 
 为运行 HarmonyOS 4 的 Mate 60 提供可直接安装的 Android APK，优先完成本地
 Obsidian Vault 编辑和拍照记录闭环。
 
-当前 Android 开发基线为 `0.5.2`；历史版本范围、验证状态和后续版本管理规则见
+当前 Android 开发基线为 `0.6.0`；历史版本范围、验证状态和后续版本管理规则见
 [`docs/RELEASE_NOTES.md`](../../RELEASE_NOTES.md)。完成 FR-501、FR-507、FR-508 对应的
 Mate 60 真机验收前，该版本不得标记为候选或正式发布。
 
@@ -65,6 +65,9 @@ Mate 60 真机验收前，该版本不得标记为候选或正式发布。
 - **FR-505** 所有 Markdown 和附件必须直接写入 Vault，不得只存于应用私有目录。
 - **FR-506** Google Drive 首阶段不得使用已废弃的 Drive Android API；Google Play 服务
   账号授权仅在 Mate 60 真机验证可用后作为当前切片依赖，替代授权方案由 `003` 跟踪。
+- **FR-536** Android 设置页必须提供 OneDrive 连接、目录选择/创建、范围确认和后台手动同步；
+  使用 MSAL 与 Microsoft Graph，复用 Google Drive 已有的 Vault 租约、冲突保留、同步详情和取消
+  语义，并按 provider/Vault/account/root 隔离绑定与成功基线。
 - **FR-507** Android API 等级、WebView、相机 URI 和后台限制必须以 Mate 60
   HarmonyOS 4 真机结果确定。
 - **FR-508** 首个里程碑必须输出可安装 APK、版本信息和真机验收记录。

@@ -1,4 +1,4 @@
-# Implementation Plan: Google Drive 与 NAS 同步
+# Implementation Plan: Google Drive、OneDrive 与 NAS 同步
 
 ## Architecture
 
@@ -27,6 +27,20 @@ Provider 共用文件内容流、基线、断点与错误契约及测试样例�
 7. Android 将 Google Drive 传输逐步收敛到既有 `SyncProvider`、`SyncPlanner`、`SyncEngine`
    契约；先保持“不传播普通删除”和 MoveBundle 语义，再新增其他 Provider，不能以复制 HAP
    实现替代 Android 的并发与恢复验证。
+8. Android 复用已验证的分层文件同步引擎接入 OneDrive：MSAL 只负责账号与短期令牌，
+   Microsoft Graph adapter 负责目录/内容/ETag/上传会话/回收站 I/O；Provider 名称、目录类型、
+   绑定和基线显式隔离，不复制冲突决策。
+
+## Android OneDrive First Slice
+
+OneDrive 与 Google Drive 使用相同的本地严格快照、冲突副本、MoveBundle、Vault 租约、后台
+任务状态和成功基线提交规则。应用注册参数由构建环境提供；仓库不包含客户端密钥。MSAL 在
+系统安全边界内缓存账号会话，后台服务只按绑定账号静默取得当前访问令牌。
+
+Microsoft Graph adapter 对上传内容先落到可重建的应用缓存文件以获得精确长度：小文件直接
+上传，大文件使用上传会话分块发送；成功、失败和取消都清理缓存。预授权下载 URL、令牌和传输
+缓存不进入 Vault、普通偏好或日志。首阶段仍不传播普通删除，但已验证的 MoveBundle 旧路径可
+进入 OneDrive 回收站。
 
 ## Android Google Drive First Slice
 

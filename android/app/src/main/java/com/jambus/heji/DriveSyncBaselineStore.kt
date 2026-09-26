@@ -13,7 +13,8 @@ data class DriveBaselineFile(
     val remoteVersion: Long?,
     val localMd5: String? = null,
     val localLastModified: Long? = null,
-    val localSize: Long? = null
+    val localSize: Long? = null,
+    val remoteRevision: String? = remoteVersion?.toString()
 )
 data class DriveSyncBaseline(val vaultId: String, val rootId: String, val accountId: String, val files: Map<String, DriveBaselineFile>, val completedAt: Long)
 
@@ -29,8 +30,11 @@ interface DriveBaselineStore {
 }
 
 /** Per-Vault, per-Drive-root successful comparison state; never Vault content. */
-class LocalDriveSyncBaselineStore(context: Context) : DriveBaselineStore {
-    private val preferences = context.getSharedPreferences("heji_notes_drive_baselines", Context.MODE_PRIVATE)
+class LocalDriveSyncBaselineStore(context: Context, providerId: String = "google_drive") : DriveBaselineStore {
+    private val preferences = context.getSharedPreferences(
+        if (providerId == "google_drive") "heji_notes_drive_baselines" else "heji_notes_drive_baselines_$providerId",
+        Context.MODE_PRIVATE
+    )
 
     override fun load(vaultId: String, rootId: String, accountId: String): DriveBaselineLoad {
         val raw = preferences.getString(key(vaultId, rootId, accountId), null) ?: return DriveBaselineLoad.Missing
@@ -53,7 +57,8 @@ class LocalDriveSyncBaselineStore(context: Context) : DriveBaselineStore {
                         item.optLong("remoteVersion").takeIf { item.has("remoteVersion") },
                         localMd5,
                         localLastModified,
-                        localSize
+                        localSize,
+                        item.optString("remoteRevision").takeIf { it.isNotBlank() }
                     ))
                 }
             }
@@ -73,6 +78,7 @@ class LocalDriveSyncBaselineStore(context: Context) : DriveBaselineStore {
             file.localMd5?.let { fileJson.put("localMd5", it) }
             file.localLastModified?.let { fileJson.put("localLastModified", it) }
             file.localSize?.let { fileJson.put("localSize", it) }
+            file.remoteRevision?.let { fileJson.put("remoteRevision", it) }
             files.put(fileJson)
         }
         val value = JSONObject().put("schema", 2).put("vaultId", baseline.vaultId).put("rootId", baseline.rootId).put("accountId", baseline.accountId)

@@ -42,8 +42,21 @@
 - [x] T322 Android：以单一 `openSyncInput` 流同时计算 MD5 与 SHA-256，并在保存同步基线时
   复用未变化文件的本轮摘要；补充输入流打开次数、摘要正确性、读取失败关闭流和大附件回归测试
   （FR-322）。
-- [ ] T323 Android：为 Google Drive 实现建立到 `SyncProvider`、`SyncPlanner`、`SyncEngine`
-  的适配边界和共享测试样例；迁移期间保持当前本地 `.trash/` 排除、普通删除不传播、条件写入、
-  MoveBundle 与冲突保留语义，未完成前不得声称支持 OneDrive/S3/WebDAV。
+- [x] T323 Android：将 Google Drive 的分层传输收敛到共享 `RemoteDriveSyncEngine` 与
+  `DriveGateway` adapter 边界；Provider 名称、目录类型、opaque revision、绑定和基线不再写死
+  为 Google，保持 `.trash/` 排除、普通删除不传播、条件写入、MoveBundle 与冲突保留语义。
 - [x] T324 Android：按稳定 Vault URI 隔离 Google Drive 账号/root/名称/上次成功元数据；保留账号
   不匹配绑定并要求重新登录，同步启动前重验 Vault/账号/root，覆盖 A/B 隔离和旧标量幂等迁移。
+
+## Phase 5 OneDrive（Android 优先）
+
+- [x] T325 更新共享设计、Vault 绑定契约、规格与验收范围，明确 OneDrive 不改变 Markdown、
+  附件相对路径、冲突和 `.trash/` 语义。
+- [x] T326 Android：接入 MSAL 公共客户端登录与静默令牌获取；构建期注入应用注册 ID/签名哈希，
+  令牌不进入普通偏好、Vault 或日志。
+- [x] T327 Android：实现 Microsoft Graph 目录选择/创建、递归列举、下载、条件替换、复制、回收站
+  删除，以及小文件直接上传和大文件上传会话。
+- [x] T328 Android：将 OneDrive 接入统一后台任务、Vault 租约、冲突保留和成功基线；按
+  provider/vault/account/root 隔离绑定与基线并增加策略测试。
+- [ ] T329 Mate 60：配置真实 Entra 应用后验证个人/组织账号登录、目录选择、大文件、后台取消、
+  令牌失效、双端冲突、MoveBundle 回收旧路径和进程中断恢复；完成前不得标记候选发布。

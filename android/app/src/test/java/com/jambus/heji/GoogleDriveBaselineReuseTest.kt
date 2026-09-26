@@ -205,4 +205,121 @@ class GoogleDriveBaselineReuseTest {
         assertTrue("Fallback must be invoked when size differs even if timestamp matches", fallbackInvoked.get())
         assertEquals("recomputed-md5", digest!!.md5)
     }
+
+    @Test
+    fun `SyncItemComparisonPolicy returns UNCHANGED when remoteMd5 is null but downloaded md5 matches localMd5 without baseline`() {
+        var downloadInvoked = false
+        val result = SyncItemComparisonPolicy.evaluate(
+            localMd5 = "abc123md5",
+            localSha256 = "sha256local",
+            remoteMd5 = null, // e.g. OneDrive
+            remoteId = "remote-1",
+            remoteRevision = "rev-1",
+            baseline = null, // first sync
+            remoteHashSupplier = {
+                downloadInvoked = true
+                "abc123md5" // content matches!
+            }
+        )
+        assertTrue(downloadInvoked)
+        assertEquals(SyncComparisonAction.UNCHANGED, result.action)
+        assertEquals("abc123md5", result.remoteHash)
+        assertFalse(result.remoteRevisionMatches)
+    }
+
+    @Test
+    fun `SyncItemComparisonPolicy returns UNCHANGED when remoteRevision and localSha256 match baseline without download`() {
+        val base = DriveBaselineFile(
+            path = "note.md",
+            localSha256 = "sha-same",
+            remoteId = "remote-1",
+            remoteMd5 = "remote-md5-same",
+            remoteVersion = null,
+            localMd5 = "local-md5-same",
+            localLastModified = 1000L,
+            localSize = 50L,
+            remoteRevision = "rev-1"
+        )
+        var downloadInvoked = false
+        val result = SyncItemComparisonPolicy.evaluate(
+            localMd5 = "local-md5-same",
+            localSha256 = "sha-same",
+            remoteMd5 = null,
+            remoteId = "remote-1",
+            remoteRevision = "rev-1",
+            baseline = base,
+            remoteHashSupplier = {
+                downloadInvoked = true
+                "recomputed-md5"
+            }
+        )
+        assertFalse("Must not download when revision and local hash match baseline", downloadInvoked)
+        assertEquals(SyncComparisonAction.UNCHANGED, result.action)
+        assertEquals("remote-md5-same", result.remoteHash)
+        assertTrue(result.remoteRevisionMatches)
+    }
+
+    @Test
+    fun `SyncItemComparisonPolicy returns UPLOAD_LOCAL_UPDATE when local changed and remote revision matches`() {
+        val base = DriveBaselineFile(
+            path = "note.md",
+            localSha256 = "sha-old",
+            remoteId = "remote-1",
+            remoteMd5 = "remote-md5-same",
+            remoteVersion = null,
+            localMd5 = "local-md5-old",
+            localLastModified = 1000L,
+            localSize = 50L,
+            remoteRevision = "rev-1"
+        )
+        var downloadInvoked = false
+        val result = SyncItemComparisonPolicy.evaluate(
+            localMd5 = "local-md5-new",
+            localSha256 = "sha-new",
+            remoteMd5 = null,
+            remoteId = "remote-1",
+            remoteRevision = "rev-1",
+            baseline = base,
+            remoteHashSupplier = {
+                downloadInvoked = true
+                "recomputed-md5"
+            }
+        )
+        assertFalse("Must not download when remote revision matches baseline", downloadInvoked)
+        assertEquals(SyncComparisonAction.UPLOAD_LOCAL_UPDATE, result.action)
+        assertEquals("remote-md5-same", result.remoteHash)
+        assertTrue(result.remoteRevisionMatches)
+    }
+
+    @Test
+    fun `SyncItemComparisonPolicy returns CONFLICT when both local and remote changed to different content`() {
+        val base = DriveBaselineFile(
+            path = "note.md",
+            localSha256 = "sha-old",
+            remoteId = "remote-1",
+            remoteMd5 = "remote-md5-old",
+            remoteVersion = null,
+            localMd5 = "local-md5-old",
+            localLastModified = 1000L,
+            localSize = 50L,
+            remoteRevision = "rev-1"
+        )
+        var downloadInvoked = false
+        val result = SyncItemComparisonPolicy.evaluate(
+            localMd5 = "local-md5-new",
+            localSha256 = "sha-new",
+            remoteMd5 = null,
+            remoteId = "remote-1",
+            remoteRevision = "rev-2",
+            baseline = base,
+            remoteHashSupplier = {
+                downloadInvoked = true
+                "remote-md5-different"
+            }
+        )
+        assertTrue(downloadInvoked)
+        assertEquals(SyncComparisonAction.CONFLICT, result.action)
+        assertEquals("remote-md5-different", result.remoteHash)
+        assertFalse(result.remoteRevisionMatches)
+    }
 }

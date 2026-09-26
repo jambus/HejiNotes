@@ -14,7 +14,9 @@ data class DriveItem(
     val name: String,
     val mimeType: String,
     val md5: String? = null,
-    val version: Long? = null
+    val version: Long? = null,
+    /** Provider revision is opaque. Google numeric versions remain available for legacy baselines. */
+    val revision: String? = version?.toString()
 )
 data class DriveRevision(val item: DriveItem, val etag: String?)
 
@@ -22,6 +24,11 @@ class DriveApiException(message: String) : Exception(message)
 
 /** Narrow Drive REST adapter. It deliberately keeps credentials and network URLs out of logs. */
 interface DriveGateway {
+    val providerId: String get() = "google_drive"
+    val providerName: String get() = "Google Drive"
+    val folderMimeType: String get() = GoogleDriveApi.FOLDER_MIME_TYPE
+    fun isFolder(item: DriveItem): Boolean = item.mimeType == folderMimeType
+    fun shouldSync(item: DriveItem): Boolean = !item.mimeType.startsWith("application/vnd.google-apps.")
     fun listChildren(parentId: String): List<DriveItem>
     fun createFolder(parentId: String, name: String): DriveItem
     fun upload(parentId: String, name: String, mimeType: String, input: InputStream)

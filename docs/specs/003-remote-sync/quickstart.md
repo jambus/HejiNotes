@@ -15,6 +15,14 @@
    凭据和同步基线不上传。
 4. 确认凭据使用安全存储；同步范围和远端目标在首次上传前明确展示。
 
+## OneDrive 配置
+
+1. 按 `android-onedrive-oauth-setup.md` 注册 Microsoft Entra 公共客户端，并通过 Gradle 属性注入
+   client ID 与 Android 签名哈希；仓库不保存客户端密钥。
+2. 在“同步”中选择 OneDrive，完成 Microsoft 个人或组织账号授权。
+3. 选择或创建 OneDrive Vault 根目录，核对本地 Vault、远端目录和同步范围后开始同步。
+4. 验证退出应用后可静默刷新，撤销授权后明确要求重新登录，日志和偏好中无令牌或下载 URL。
+
 ## 验收
 
 先运行协议无关的 Provider、规划器、基线编解码、冲突保留和故障注入测试，再构建

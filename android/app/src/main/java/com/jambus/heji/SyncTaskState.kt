@@ -3,6 +3,16 @@ package com.jambus.heji
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
+import java.util.Base64
+
+internal object SyncTaskVaultKey {
+    fun fromVaultId(vaultId: String): String {
+        if (vaultId.isBlank()) return ""
+        val digest = MessageDigest.getInstance("SHA-256").digest(vaultId.toByteArray(Charsets.UTF_8))
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+    }
+}
 
 enum class SyncTaskStatus {
     RUNNING, SUCCEEDED, FAILED, CANCELLED, INTERRUPTED
@@ -66,7 +76,11 @@ class SyncTaskStateStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
     @Synchronized
-    fun snapshot(): SyncTaskSnapshot? = preferences.getString(SNAPSHOT_KEY, null)?.let(::decode)
+    fun snapshot(): SyncTaskSnapshot? = preferences.getString(SNAPSHOT_KEY, null)?.let(::decode)?.let { decoded ->
+        if (decoded.vaultId.startsWith("content://")) {
+            decoded.copy(vaultId = SyncTaskVaultKey.fromVaultId(decoded.vaultId)).also(::save)
+        } else decoded
+    }
 
     @Synchronized
     fun begin(providerId: String, providerName: String, targetName: String, vaultId: String = ""): SyncTaskSnapshot? {
@@ -81,7 +95,8 @@ class SyncTaskStateStore(context: Context) {
             messageCode = SyncMessageCode.PREPARING,
             startedAt = System.currentTimeMillis(),
             finishedAt = 0L,
-            vaultId = vaultId
+            // Persist only a one-way lookup key, never the SAF tree URI itself.
+            vaultId = SyncTaskVaultKey.fromVaultId(vaultId)
         ).also(::save)
     }
 
@@ -187,17 +202,30 @@ class SyncTaskStateStore(context: Context) {
         null
     }
 
-    /** Persist only a Vault-relative, syntax-checked path parameter; never a localized failure message. */
-    private fun safePath(error: String): String = Regex("[A-Za-z0-9._/-]+(?:\\.[A-Za-z0-9]+)?")
-        .findAll(error)
-        .map { it.value }
-        .lastOrNull { it.contains('/') || it.endsWith(".md", true) || it.endsWith(".jpg", true) || it.endsWith(".mp4", true) }
-        ?.takeIf { it.length <= 240 && !it.startsWith('/') && !it.contains("..") }
-        .orEmpty()
-
     companion object {
         private const val PREFERENCES_NAME = "heji_notes_sync_tasks"
         private const val SNAPSHOT_KEY = "latest_task"
         private const val MAX_ERROR_DETAILS = 5
+
+        /** Persist only a Vault-relative, syntax-checked path parameter; never a localized failure message. */
+        internal fun safePath(error: String): String {
+            val candidate = if (error.contains(": ")) error.substringBefore(": ").trim() else error.trim()
+            if (candidate.isNotEmpty() &&
+                candidate.length <= 240 &&
+                !candidate.startsWith('/') &&
+                !candidate.contains("..") &&
+                !candidate.contains('\\') &&
+                !candidate.any { it in "\u0000\r\n\t*?\"<>|" } &&
+                (candidate.contains('/') || candidate.endsWith(".md", true) || candidate.endsWith(".jpg", true) || candidate.endsWith(".mp4", true))
+            ) {
+                return candidate
+            }
+            return Regex("[A-Za-z0-9._/-]+(?:\\.[A-Za-z0-9]+)?")
+                .findAll(error)
+                .map { it.value }
+                .lastOrNull { it.contains('/') || it.endsWith(".md", true) || it.endsWith(".jpg", true) || it.endsWith(".mp4", true) }
+                ?.takeIf { it.length <= 240 && !it.startsWith('/') && !it.contains("..") }
+                .orEmpty()
+        }
     }
 }

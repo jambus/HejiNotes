@@ -25,6 +25,8 @@ Provider 负责协议转换，不决定冲突策略。
 - 相对路径必须规范化并禁止 `..` 逃逸笔记本根目录。
 - 所有写操作必须幂等或携带可安全重试的操作 ID。
 - Provider 不得记录凭据、正文或临时下载 URL。
+- Provider 名称、目录判定和 native-document 判定由 adapter 明确提供；同步引擎不得把 Google
+  MIME 类型或名称写死到跨 Provider 冲突与路径逻辑中。
 - 返回的 revision 与 cursor 视为 opaque 字符串。
 - 网络失败不得被解释为远端文件不存在。
 - 无游标枚举必须包含全部现存文件，不能只返回近期变化。

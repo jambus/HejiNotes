@@ -51,6 +51,8 @@ class MainActivity : Activity() {
     private lateinit var repository: VaultRepository
     private lateinit var drivePreferences: DriveSyncPreferences
     private lateinit var driveAuth: GoogleDriveAuth
+    private lateinit var oneDrivePreferences: OneDriveSyncPreferences
+    private lateinit var oneDriveAuth: OneDriveAuth
     private val driveExecutor = Executors.newSingleThreadExecutor()
     private val noteIoExecutor = AppNoteSaveCoordinator
     private val structuralIoExecutor = Executors.newSingleThreadExecutor()
@@ -132,6 +134,14 @@ class MainActivity : Activity() {
     private var drivePickerFolders: List<DriveItem>? = null
     private var drivePickerError: String? = null
     private var drivePickerMessage: String? = null
+    private var oneDriveAccount: OneDriveAccount? = null
+    private var oneDriveCheckedVaultId: String? = null
+    private var oneDriveFolderDirectory: DriveVaultRoot? = null
+    private val oneDriveFolderHistory = mutableListOf<DriveVaultRoot>()
+    private var oneDrivePickerFolders: List<DriveItem>? = null
+    private var oneDrivePickerError: String? = null
+    private var oneDrivePickerMessage: String? = null
+    private var oneDriveFolderGeneration = 0L
 
     override fun attachBaseContext(newBase: android.content.Context) {
         // Apply the saved app-only language before any view or resource is created.
@@ -143,6 +153,8 @@ class MainActivity : Activity() {
         repository = VaultRepository(this)
         drivePreferences = DriveSyncPreferences(this)
         driveAuth = GoogleDriveAuth(this)
+        oneDrivePreferences = OneDriveSyncPreferences(this)
+        oneDriveAuth = OneDriveAuth(this)
         if (!BackgroundSyncService.isActive()) SyncTaskStateStore(this).markInterruptedIfRunning()
         applyWindowColors()
         if (repository.savedVaultUri() == null) {
@@ -340,6 +352,8 @@ class MainActivity : Activity() {
             Screen.DRIVE_FOLDER_PICKER, Screen.DRIVE_CONFIRM -> {
                 showDriveSetup()
             }
+            Screen.ONEDRIVE_SETUP -> showOneDriveSetup()
+            Screen.ONEDRIVE_FOLDER_PICKER, Screen.ONEDRIVE_CONFIRM -> showOneDriveSetup()
             Screen.VIDEO -> {
                 val note = SavedStateBundle.getDocument(savedInstanceState, SavedStateBundle.PREFIX_NOTE)
                 if (note != null) openNote(note) else showVaultBrowser(resetToRoot = false)
@@ -406,6 +420,8 @@ class MainActivity : Activity() {
             Screen.DAILY_FOLDER_PICKER -> showSettings()
             Screen.DRIVE_SETUP, Screen.DRIVE_DETAILS -> showSettings()
             Screen.DRIVE_FOLDER_PICKER, Screen.DRIVE_CONFIRM -> showDriveSetup()
+            Screen.ONEDRIVE_SETUP -> showSettings()
+            Screen.ONEDRIVE_FOLDER_PICKER, Screen.ONEDRIVE_CONFIRM -> showOneDriveSetup()
             Screen.SEARCH -> showVaultBrowser()
             Screen.WELCOME -> super.onBackPressed()
         }
@@ -936,13 +952,30 @@ class MainActivity : Activity() {
         val driveRoot = driveBinding?.root
         val syncSnapshot = currentSyncSnapshot()
         val driveStatus = when {
-            syncSnapshot?.isRunning == true -> getString(R.string.drive_status_running, driveRoot?.name ?: syncSnapshot.targetName, syncSnapshot.statusLabel(this))
+            syncSnapshot?.isRunning == true && syncSnapshot.providerId == "google_drive" -> getString(R.string.drive_status_running, driveRoot?.name ?: syncSnapshot.targetName, syncSnapshot.statusLabel(this))
             driveBinding == null -> getString(R.string.drive_status_disconnected)
             !driveAuth.isAuthorized(driveAuth.currentAccount()) || driveBinding.accountId != accountId -> getString(R.string.drive_status_sign_in, driveBinding.root.name)
             drivePreferences.lastSuccessAt(vaultId, driveBinding.root.id, accountId) > 0L -> getString(R.string.drive_status_last_sync, driveBinding.root.name, formatSyncTime(drivePreferences.lastSuccessAt(vaultId, driveBinding.root.id, accountId)))
             else -> getString(R.string.drive_status_selected, driveBinding.root.name)
         }
         content.addView(settingsRow("Google Drive", driveStatus, false) { showDriveSetup() }, matchWrap())
+        val oneDriveBinding = oneDrivePreferences.binding(vaultId)
+        val oneDriveStatus = when {
+            syncSnapshot?.isRunning == true && syncSnapshot.providerId == "onedrive" ->
+                getString(R.string.drive_status_running, oneDriveBinding?.root?.name ?: syncSnapshot.targetName, syncSnapshot.statusLabel(this))
+            !oneDriveAuth.isConfigured -> getString(R.string.onedrive_status_not_configured)
+            oneDriveBinding == null -> getString(R.string.drive_status_disconnected)
+            oneDrivePreferences.requiresRelogin(vaultId) -> getString(R.string.drive_status_sign_in, oneDriveBinding.root.name)
+            oneDriveBinding.lastSuccessAt > 0L -> getString(
+                R.string.drive_status_last_sync,
+                oneDriveBinding.root.name,
+                formatSyncTime(oneDriveBinding.lastSuccessAt)
+            )
+            else -> getString(R.string.drive_status_selected, oneDriveBinding.root.name)
+        }
+        content.addView(settingsRow("OneDrive", oneDriveStatus, false) { showOneDriveSetup() }, matchWrap().apply {
+            topMargin = dp(8)
+        })
         syncSnapshot?.let { snapshot ->
             content.addView(settingsRow(ui("同步详情"), snapshot.statusLabel(this), false) { showSyncDetails() }, matchWrap().apply {
                 topMargin = dp(8)
@@ -1384,7 +1417,7 @@ class MainActivity : Activity() {
             showDriveSetup("同步正在运行，完成后才能更换 Google Drive 目录。")
             return
         }
-        if (LocalChangeJournal(this).changes(vaultId)?.isNotEmpty() == true) {
+        if (drivePreferences.binding(vaultId) != null && LocalChangeJournal(this).changes(vaultId, "google_drive")?.isNotEmpty() == true) {
             showDriveSetup("存在尚未确认的本地搬运，请先完成或重试当前同步后再更换 Google Drive 目录。")
             return
         }
@@ -1504,6 +1537,335 @@ class MainActivity : Activity() {
         }
         BackgroundSyncService.startGoogleDrive(this, rootSelection, vaultUri, account.email.orEmpty())
         showDriveSetup("同步已在后台开始。你可以继续编辑本地文件；完成或失败时会通知你。")
+    }
+
+    private fun showOneDriveSetup(message: String? = null) {
+        releaseEditor()
+        screen = Screen.ONEDRIVE_SETUP
+        val root = pageRoot(COLOR_BACKGROUND)
+        root.addView(simpleToolbar(ui("‹  设置"), "OneDrive") { showSettings() }, matchWrap())
+        val scroll = ScrollView(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(24))
+        }
+        message?.let { content.addView(infoBanner(it), matchWrap().apply { bottomMargin = dp(12) }) }
+        if (!oneDriveAuth.isConfigured) {
+            content.addView(emptyState(getString(R.string.onedrive_not_configured_detail)), matchWrap())
+            scroll.addView(content, LinearLayout.LayoutParams(-1, -2))
+            root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+            setContentView(root)
+            return
+        }
+        val vaultId = repository.savedVaultUri()?.toString().orEmpty()
+        val binding = oneDrivePreferences.binding(vaultId)
+        if (binding != null && oneDriveCheckedVaultId != vaultId) {
+            content.addView(emptyState(getString(R.string.onedrive_checking_account)), matchWrap())
+            scroll.addView(content, LinearLayout.LayoutParams(-1, -2))
+            root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+            setContentView(root)
+            val requestVaultId = vaultId
+            val generation = ++oneDriveFolderGeneration
+            driveExecutor.execute {
+                val account = runCatching { oneDriveAuth.account(binding.accountId) }.getOrNull()
+                runOnUiThread {
+                    val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
+                    if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_SETUP) {
+                        oneDriveAccount = account
+                        oneDriveCheckedVaultId = requestVaultId
+                        showOneDriveSetup(message)
+                    }
+                }
+            }
+            return
+        }
+        val account = oneDriveAccount
+        val matches = account != null && !oneDrivePreferences.requiresRelogin(vaultId) &&
+            (binding == null || binding.accountId == account.id)
+        if (!matches) {
+            val detail = if (binding == null) getString(R.string.onedrive_connect_detail)
+            else getString(R.string.onedrive_binding_mismatch_detail, binding.root.name)
+            content.addView(emptyState(detail), matchWrap().apply { bottomMargin = dp(14) })
+            content.addView(action(getString(if (binding == null) R.string.onedrive_connect_action else R.string.onedrive_relogin_action), true) {
+                val requestVaultId = vaultId
+                val generation = ++oneDriveFolderGeneration
+                oneDriveAuth.signIn(this) { result ->
+                    val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
+                    if (generation != oneDriveFolderGeneration || currentVaultId != requestVaultId || screen != Screen.ONEDRIVE_SETUP) {
+                        return@signIn
+                    }
+                    result.onSuccess {
+                        oneDriveAccount = it
+                        oneDriveCheckedVaultId = requestVaultId
+                        if (binding == null || binding.accountId == it.id) oneDrivePreferences.clearReloginRequired(requestVaultId)
+                        val connected = if (binding != null && binding.accountId != it.id) {
+                            getString(R.string.onedrive_wrong_account)
+                        } else getString(R.string.onedrive_connected)
+                        showOneDriveSetup(connected)
+                    }.onFailure { failure ->
+                        if (failure !is OneDriveSignInCancelled) showOneDriveSetup(getString(R.string.onedrive_connect_failed))
+                    }
+                }
+            }, matchWrap())
+        } else {
+            val connectedAccount = requireNotNull(account)
+            content.addView(TextView(this).apply {
+                text = getString(R.string.onedrive_connected_account, connectedAccount.displayName)
+                textSize = 14f
+                setTextColor(COLOR_SECONDARY_TEXT)
+                setPadding(dp(6), dp(2), dp(6), dp(14))
+            }, matchWrap())
+            val selectedRoot = oneDrivePreferences.root(vaultId, connectedAccount.id)
+            if (selectedRoot == null) {
+                content.addView(action(getString(R.string.onedrive_choose_vault), true) { showOneDriveFolderPicker(true) }, matchWrap())
+            } else {
+                content.addView(settingsRow("OneDrive Vault", selectedRoot.name, true) { showOneDriveFolderPicker(true) }, matchWrap().apply {
+                    bottomMargin = dp(12)
+                })
+                val syncSnapshot = currentSyncSnapshot()
+                if (syncSnapshot?.isRunning == true) {
+                    content.addView(action(ui("同步详情"), true) { showSyncDetails() }, matchWrap())
+                } else {
+                    content.addView(action(ui("开始同步"), true) { showOneDriveSyncConfirmation(selectedRoot) }, matchWrap())
+                }
+                content.addView(action(getString(R.string.onedrive_change_vault), false) { showOneDriveFolderPicker(true) }, matchWrap().apply {
+                    topMargin = dp(8)
+                })
+            }
+        }
+        scroll.addView(content, LinearLayout.LayoutParams(-1, -2))
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        setContentView(root)
+    }
+
+    private fun showOneDriveFolderPicker(reset: Boolean = false) {
+        val requestVaultId = repository.savedVaultUri()?.toString().orEmpty()
+        val account = oneDriveAccount ?: run {
+            showOneDriveSetup(getString(R.string.onedrive_account_relogin_required))
+            return
+        }
+        if (reset) {
+            oneDriveFolderDirectory = null
+            oneDriveFolderHistory.clear()
+        }
+        val generation = ++oneDriveFolderGeneration
+        val requestDirectory = oneDriveFolderDirectory
+        oneDrivePickerFolders = null
+        oneDrivePickerError = null
+        oneDrivePickerMessage = getString(R.string.onedrive_reading_folders)
+        screen = Screen.ONEDRIVE_FOLDER_PICKER
+        renderOneDriveFolderPicker()
+        driveExecutor.execute {
+            try {
+                val api = OneDriveApi(oneDriveAuth.accessToken(account.id), cacheDir)
+                val directory = requestDirectory ?: api.root()
+                val folders = api.listChildren(directory.id).filter(api::isFolder).sortedBy { it.name.lowercase() }
+                runOnUiThread {
+                    val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
+                    if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_FOLDER_PICKER) {
+                        oneDriveFolderDirectory = directory
+                        oneDrivePickerFolders = folders
+                        oneDrivePickerMessage = null
+                        renderOneDriveFolderPicker()
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is OneDriveReloginRequired) {
+                    runOnUiThread {
+                        val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
+                        if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId) {
+                            oneDrivePreferences.markReloginRequired(requestVaultId)
+                            oneDriveAccount = null
+                            oneDriveCheckedVaultId = null
+                            if (screen in setOf(Screen.ONEDRIVE_FOLDER_PICKER, Screen.ONEDRIVE_SETUP)) {
+                                showOneDriveSetup(getString(R.string.onedrive_account_relogin_required))
+                            }
+                        }
+                    }
+                } else {
+                    runOnUiThread {
+                        val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
+                        if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_FOLDER_PICKER) {
+                            oneDrivePickerError = getString(R.string.onedrive_read_failed)
+                            oneDrivePickerMessage = null
+                            renderOneDriveFolderPicker()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun renderOneDriveFolderPicker() {
+        val root = pageRoot(COLOR_BACKGROUND)
+        val directory = oneDriveFolderDirectory
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(8))
+            background = colorBlock(COLOR_SURFACE)
+            addView(action("‹  OneDrive", false) { showOneDriveSetup() })
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.onedrive_choose_vault)
+                textSize = 19f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setTextColor(COLOR_PRIMARY_TEXT)
+            }, LinearLayout.LayoutParams(0, dp(44), 1f))
+            addView(action(ui("选择此目录"), true) { confirmOneDriveFolder() }.apply { isEnabled = directory != null })
+        }, matchWrap())
+        val scroll = ScrollView(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(24))
+        }
+        content.addView(TextView(this).apply {
+            text = directory?.name ?: "OneDrive"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_PRIMARY_TEXT)
+            setPadding(dp(6), 0, dp(6), dp(10))
+        }, matchWrap())
+        if (oneDriveFolderHistory.isNotEmpty()) {
+            content.addView(action(ui("上一级"), false) {
+                oneDriveFolderDirectory = oneDriveFolderHistory.removeAt(oneDriveFolderHistory.lastIndex)
+                showOneDriveFolderPicker(false)
+            }, matchWrap().apply { bottomMargin = dp(8) })
+        }
+        content.addView(action(ui("新建文件夹"), false) { promptCreateOneDriveFolder() }, matchWrap().apply { bottomMargin = dp(8) })
+        when {
+            oneDrivePickerError != null -> content.addView(infoBanner(oneDrivePickerError!!), matchWrap())
+            oneDrivePickerFolders == null -> content.addView(emptyState(oneDrivePickerMessage ?: getString(R.string.onedrive_reading_folders)), matchWrap())
+            oneDrivePickerFolders!!.isEmpty() -> content.addView(emptyState(getString(R.string.onedrive_empty_folder)), matchWrap())
+            else -> oneDrivePickerFolders!!.forEach { folder ->
+                content.addView(vaultRow(R.drawable.ic_browser_folder, folder.name, "OneDrive", "OneDrive") {
+                    directory?.let(oneDriveFolderHistory::add)
+                    oneDriveFolderDirectory = DriveVaultRoot(folder.id, folder.name)
+                    showOneDriveFolderPicker(false)
+                }, matchWrap())
+            }
+        }
+        scroll.addView(content, LinearLayout.LayoutParams(-1, -2))
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        setContentView(root)
+    }
+
+    private fun promptCreateOneDriveFolder() {
+        val input = EditText(dialogContext()).apply { hint = ui("新建文件夹"); setSingleLine(true) }
+        val dialog = dialogBuilder().setTitle(ui("新建文件夹")).setView(input)
+            .setNegativeButton(ui("取消"), null).setPositiveButton(ui("创建"), null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val name = input.text.toString().trim()
+                if (!validDriveFolderName(name)) { input.error = getString(R.string.onedrive_invalid_folder); return@setOnClickListener }
+                dialog.dismiss()
+                createOneDriveFolder(name)
+            }
+        }
+        dialog.show()
+    }
+
+    private fun createOneDriveFolder(name: String) {
+        val requestVaultId = repository.savedVaultUri()?.toString().orEmpty()
+        val account = oneDriveAccount ?: run {
+            showOneDriveSetup(getString(R.string.onedrive_account_relogin_required))
+            return
+        }
+        val directory = oneDriveFolderDirectory ?: return
+        val generation = ++oneDriveFolderGeneration
+        oneDrivePickerFolders = null
+        oneDrivePickerError = null
+        oneDrivePickerMessage = getString(R.string.onedrive_creating_folder, name)
+        renderOneDriveFolderPicker()
+        driveExecutor.execute {
+            try {
+                val api = OneDriveApi(oneDriveAuth.accessToken(account.id), cacheDir)
+                val folder = api.createFolder(directory.id, name)
+                runOnUiThread {
+                    val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
+                    if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_FOLDER_PICKER) {
+                        oneDriveFolderHistory += directory
+                        oneDriveFolderDirectory = DriveVaultRoot(folder.id, folder.name)
+                        showOneDriveFolderPicker(false)
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is OneDriveReloginRequired) {
+                    runOnUiThread {
+                        val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
+                        if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId) {
+                            oneDrivePreferences.markReloginRequired(requestVaultId)
+                            oneDriveAccount = null
+                            oneDriveCheckedVaultId = null
+                            if (screen in setOf(Screen.ONEDRIVE_FOLDER_PICKER, Screen.ONEDRIVE_SETUP)) {
+                                showOneDriveSetup(getString(R.string.onedrive_account_relogin_required))
+                            }
+                        }
+                    }
+                } else {
+                    runOnUiThread {
+                        val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
+                        if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_FOLDER_PICKER) {
+                            oneDrivePickerError = getString(R.string.onedrive_create_failed)
+                            oneDrivePickerMessage = null
+                            renderOneDriveFolderPicker()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun confirmOneDriveFolder() {
+        val account = oneDriveAccount ?: return
+        val directory = oneDriveFolderDirectory ?: return
+        val vaultId = repository.savedVaultUri()?.toString().orEmpty()
+        if (currentSyncSnapshot()?.isRunning == true) {
+            showOneDriveSetup(getString(R.string.onedrive_change_while_running))
+            return
+        }
+        if (oneDrivePreferences.binding(vaultId) != null && LocalChangeJournal(this).changes(vaultId, "onedrive")?.isNotEmpty() == true) {
+            showOneDriveSetup(getString(R.string.onedrive_pending_move))
+            return
+        }
+        oneDrivePreferences.setRoot(directory, vaultId, account.id)
+        showOneDriveSetup(getString(R.string.onedrive_selected, directory.name))
+    }
+
+    private fun showOneDriveSyncConfirmation(rootSelection: DriveVaultRoot) {
+        screen = Screen.ONEDRIVE_CONFIRM
+        val root = pageRoot(COLOR_BACKGROUND)
+        root.addView(simpleToolbar("‹  OneDrive", ui("确认同步")) { showOneDriveSetup() }, matchWrap())
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(20), dp(20), dp(24))
+        }
+        content.addView(TextView(this).apply {
+            text = getString(R.string.onedrive_confirmation, currentVaultName, rootSelection.name)
+            textSize = 15f
+            setTextColor(COLOR_SECONDARY_TEXT)
+            setPadding(0, dp(12), 0, dp(22))
+        }, matchWrap())
+        content.addView(action(ui("开始同步"), true) { startOneDriveSync(rootSelection) }, matchWrap())
+        content.addView(action(ui("取消"), false) { showOneDriveSetup() }, matchWrap().apply { topMargin = dp(8) })
+        root.addView(content, matchWrap())
+        setContentView(root)
+    }
+
+    private fun startOneDriveSync(rootSelection: DriveVaultRoot) {
+        val account = oneDriveAccount ?: run {
+            showOneDriveSetup(getString(R.string.onedrive_account_relogin_required)); return
+        }
+        val vaultUri = repository.savedVaultUri()?.toString() ?: run {
+            showOneDriveSetup(getString(R.string.onedrive_local_vault_unavailable)); return
+        }
+        val binding = oneDrivePreferences.binding(vaultUri)
+        if (binding == null || binding.accountId != account.id || binding.root.id != rootSelection.id || binding.root.name != rootSelection.name) {
+            showOneDriveSetup(getString(R.string.onedrive_sync_tuple_changed))
+            return
+        }
+        BackgroundSyncService.startOneDrive(this, rootSelection, vaultUri, account.id)
+        showOneDriveSetup(getString(R.string.onedrive_sync_started))
     }
 
     private fun showSyncDetails() {
@@ -2072,7 +2434,7 @@ class MainActivity : Activity() {
 
     private fun currentSyncSnapshot(): SyncTaskSnapshot? {
         val vaultId = repository.savedVaultUri()?.toString().orEmpty()
-        return SyncTaskStateStore(this).snapshot()?.takeIf { it.vaultId == vaultId }
+        return SyncTaskStateStore(this).snapshot()?.takeIf { it.vaultId == SyncTaskVaultKey.fromVaultId(vaultId) }
     }
 
     private fun runStructuralMutation(block: () -> VaultMutationResult): VaultMutationResult {
@@ -2751,6 +3113,8 @@ class MainActivity : Activity() {
                 repository.rememberVault(it)
                 browserDirectory = null
                 browserPath.clear()
+                oneDriveAccount = null
+                oneDriveCheckedVaultId = null
                 recoverVaultAndOpenBrowser()
             }
             return
@@ -4253,7 +4617,8 @@ class MainActivity : Activity() {
 
     private enum class Screen {
         WELCOME, BROWSER, SEARCH, EDITOR_LOADING, EDITOR_ERROR, EDITOR, PHOTO, VIDEO, SETTINGS, TRASH, TRASH_VIEWER, DAILY_FOLDER_PICKER,
-        DRIVE_SETUP, DRIVE_FOLDER_PICKER, DRIVE_CONFIRM, DRIVE_DETAILS
+        DRIVE_SETUP, DRIVE_FOLDER_PICKER, DRIVE_CONFIRM, DRIVE_DETAILS,
+        ONEDRIVE_SETUP, ONEDRIVE_FOLDER_PICKER, ONEDRIVE_CONFIRM
     }
 
     private data class BrowserSnapshot(

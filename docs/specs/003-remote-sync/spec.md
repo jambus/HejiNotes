@@ -1,15 +1,15 @@
-# Feature Specification: Google Drive 与 NAS 同步
+# Feature Specification: Google Drive、OneDrive 与 NAS 同步
 
 **Status**: In Progress
 **Priority**: P1
 **Depends on**: 001-local-markdown-notebook, 002-camera-attachments
-**Current Slice**: Android Google Drive manual sync
+**Current Slice**: Android Google Drive and OneDrive manual sync
 
 ## User Stories
 
 ### US1 配置远端（P1）
 
-用户可以连接 Google Drive 或 NAS，选择其中一个远端同步目标，并在明确同意后
+用户可以连接 Google Drive、OneDrive 或 NAS，选择其中一个远端同步目标，并在明确同意后
 开始同步。
 
 ### US2 手动双向同步（P1）
@@ -38,6 +38,11 @@ Mate 60 用户在 Android APK 中登录已有 Google 账号，选择一个已有
 用户启动任一远端同步后可立即继续浏览、阅读和编辑本地 Vault。任务在独立后台执行，完成或
 失败时给出系统通知；设置中的统一同步详情可查看当前进度或最后一次的目标、统计、冲突和文件级错误。
 
+### US7 Android OneDrive Vault（P1）
+
+Mate 60 用户在 Android APK 中通过 Microsoft 官方登录连接个人或组织账号，选择 OneDrive
+文件夹作为 Vault 根目录，并使用与 Google Drive 相同的范围、冲突保留、后台详情和取消语义同步。
+
 ## Functional Requirements
 
 - **FR-301** Provider 必须实现统一的枚举、下载、上传、删除和增量状态契约。
@@ -53,7 +58,7 @@ Mate 60 用户在 Android APK 中登录已有 Google 账号，选择一个已有
 - **FR-308** 登录状态必须优先保存到系统安全存储；能力不足时只在当前进程保留，
   不得降级为明文持久化，日志始终必须脱敏。
 - **FR-309** 首次上传前必须展示数据目标和范围并取得用户确认。
-- **FR-310** Google Drive 与 NAS 必须是互斥的同步目标；切换目标前必须完成
+- **FR-310** Google Drive、OneDrive 与 NAS 必须是互斥的活动同步目标；切换目标前必须完成
   当前目标的同步或明确提示未同步内容。
 - **FR-311** 同步必须支持增量传输、断点恢复、取消、重试和文件级错误摘要，
   面向几十 GB、较多照片的 Vault 不得每次全量上传。
@@ -83,3 +88,10 @@ Mate 60 用户在 Android APK 中登录已有 Google 账号，选择一个已有
   远端根 ID/名称和上次成功时间。账号不匹配时保留绑定并要求重新登录；更新或清除 B 不得改变 A。
   旧版全局值只迁移到其记录的旧 Vault，且迁移幂等。每次同步开始前必须重新核对当前
   Vault、授权账号和远端根目录绑定，任一不匹配均不得访问远端。
+- **FR-324** Android OneDrive 必须使用 Microsoft Authentication Library (MSAL) 的公共客户端
+  OAuth 流程与 Microsoft Graph，申请委托的 `Files.ReadWrite` 最小文件权限；认证库管理令牌缓存，
+  应用普通偏好、Vault、同步状态和日志不得保存访问令牌、刷新令牌或预授权下载 URL。
+- **FR-325** 每个本地 Vault 独立保留 OneDrive 的 provider/account/root/名称/上次成功绑定；
+  同步前必须重验该 tuple。OneDrive 与 Google Drive 的绑定、基线和完成时间不得互相覆盖或复用。
+- **FR-326** OneDrive 首阶段提供目录列举/创建、流式下载、小文件直接上传、大文件上传会话、
+  ETag 条件替换、Provider 回收站删除和复制完成确认；任一步骤不确定时不得提交成功基线。
