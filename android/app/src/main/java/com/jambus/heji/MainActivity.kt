@@ -1569,6 +1569,7 @@ class MainActivity : Activity() {
             driveExecutor.execute {
                 val account = runCatching { oneDriveAuth.account(binding.accountId) }.getOrNull()
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
                     if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_SETUP) {
                         oneDriveAccount = account
@@ -1590,6 +1591,7 @@ class MainActivity : Activity() {
                 val requestVaultId = vaultId
                 val generation = ++oneDriveFolderGeneration
                 oneDriveAuth.signIn(this) { result ->
+                    if (isFinishing || isDestroyed) return@signIn
                     val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
                     if (generation != oneDriveFolderGeneration || currentVaultId != requestVaultId || screen != Screen.ONEDRIVE_SETUP) {
                         return@signIn
@@ -1661,6 +1663,7 @@ class MainActivity : Activity() {
                 val directory = requestDirectory ?: api.root()
                 val folders = api.listChildren(directory.id).filter(api::isFolder).sortedBy { it.name.lowercase() }
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
                     if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_FOLDER_PICKER) {
                         oneDriveFolderDirectory = directory
@@ -1672,6 +1675,7 @@ class MainActivity : Activity() {
             } catch (failure: Exception) {
                 if (failure is OneDriveReloginRequired) {
                     runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
                         val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
                         if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId) {
                             oneDrivePreferences.markReloginRequired(requestVaultId)
@@ -1684,6 +1688,7 @@ class MainActivity : Activity() {
                     }
                 } else {
                     runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
                         val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
                         if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_FOLDER_PICKER) {
                             oneDrivePickerError = getString(R.string.onedrive_read_failed)
@@ -1782,6 +1787,7 @@ class MainActivity : Activity() {
                 val api = OneDriveApi(oneDriveAuth.accessToken(account.id), cacheDir)
                 val folder = api.createFolder(directory.id, name)
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
                     if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_FOLDER_PICKER) {
                         oneDriveFolderHistory += directory
@@ -1792,6 +1798,7 @@ class MainActivity : Activity() {
             } catch (failure: Exception) {
                 if (failure is OneDriveReloginRequired) {
                     runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
                         val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
                         if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId) {
                             oneDrivePreferences.markReloginRequired(requestVaultId)
@@ -1804,6 +1811,7 @@ class MainActivity : Activity() {
                     }
                 } else {
                     runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
                         val currentVaultId = repository.savedVaultUri()?.toString().orEmpty()
                         if (generation == oneDriveFolderGeneration && currentVaultId == requestVaultId && screen == Screen.ONEDRIVE_FOLDER_PICKER) {
                             oneDrivePickerError = getString(R.string.onedrive_create_failed)

@@ -61,6 +61,36 @@ internal object OneDriveCopyPolicy {
             CopyTargetDecision.CONFLICT_DIFFERENT_CONTENT
         }
     }
+
+    fun executeCopy(
+        sourceDigest: String,
+        findTarget: () -> DriveItem?,
+        computeDigest: (DriveItem) -> String,
+        performUpload: () -> Unit
+    ): DriveItem {
+        val existing = findTarget()
+        when (evaluateExisting(existing, sourceDigest, computeDigest)) {
+            CopyTargetDecision.REUSE_EXISTING -> return requireNotNull(existing)
+            CopyTargetDecision.CONFLICT_DIFFERENT_CONTENT -> {
+                throw DriveApiException("OneDrive copy target already exists with different content")
+            }
+            CopyTargetDecision.PROCEED_UPLOAD -> Unit
+        }
+        try {
+            performUpload()
+        } catch (failure: DriveApiException) {
+            val fallback = findTarget()
+            if (fallback != null && computeDigest(fallback).equals(sourceDigest, true)) {
+                return fallback
+            }
+            throw failure
+        }
+        val copied = findTarget()
+            ?: throw DriveApiException("OneDrive did not confirm the copied item")
+        val copiedDigest = computeDigest(copied)
+        if (!sourceDigest.equals(copiedDigest, true)) throw DriveApiException("OneDrive copy verification failed")
+        return copied
+    }
 }
 
 internal object OneDriveUrlPolicy {
@@ -92,7 +122,7 @@ internal object OneDriveUrlPolicy {
             isDomainOrSubdomain(host, "office365.com") ||
             host == "graph.microsoft.com"
         if (uri.scheme != "https" || !allowed) {
-            Log.e("OneDriveApi", "Untrusted upload URL: host='$host' url='$value'")
+            Log.e("OneDriveApi", "Untrusted upload URL host: '$host'")
             throw DriveApiException("Untrusted OneDrive upload URL")
         }
         return value
@@ -120,7 +150,7 @@ internal object OneDriveUrlPolicy {
             isDomainOrSubdomain(host, "office365.com") ||
             host == "graph.microsoft.com"
         if (uri.scheme != "https" || !allowed) {
-            Log.e("OneDriveApi", "Untrusted download URL: host='$host' url='$value'")
+            Log.e("OneDriveApi", "Untrusted download URL host: '$host'")
             throw DriveApiException("Untrusted OneDrive download URL ($host)")
         }
         return value
@@ -203,32 +233,18 @@ class OneDriveApi(
         val source = refresh(id)
         return withUploadFile(download(source)) { file ->
             val sourceDigest = file.inputStream().use(::md5)
-            val existing = listChildren(parentId).firstOrNull { it.name == name }
-            when (OneDriveCopyPolicy.evaluateExisting(existing, sourceDigest) { item -> download(item).use(::md5) }) {
-                CopyTargetDecision.REUSE_EXISTING -> return@withUploadFile requireNotNull(existing)
-                CopyTargetDecision.CONFLICT_DIFFERENT_CONTENT -> {
-                    throw DriveApiException("OneDrive copy target already exists with different content")
+            OneDriveCopyPolicy.executeCopy(
+                sourceDigest = sourceDigest,
+                findTarget = { listChildren(parentId).firstOrNull { it.name == name } },
+                computeDigest = { item -> download(item).use(::md5) },
+                performUpload = {
+                    if (file.length() <= SIMPLE_UPLOAD_LIMIT) {
+                        uploadFile("$GRAPH/me/drive/items/${path(parentId)}:/${path(name)}:/content", file, null)
+                    } else {
+                        uploadSession(parentId, name, file)
+                    }
                 }
-                CopyTargetDecision.PROCEED_UPLOAD -> Unit
-            }
-            try {
-                if (file.length() <= SIMPLE_UPLOAD_LIMIT) {
-                    uploadFile("$GRAPH/me/drive/items/${path(parentId)}:/${path(name)}:/content", file, null)
-                } else {
-                    uploadSession(parentId, name, file)
-                }
-            } catch (failure: DriveApiException) {
-                val fallback = listChildren(parentId).firstOrNull { it.name == name }
-                if (fallback != null && download(fallback).use(::md5).equals(sourceDigest, true)) {
-                    return@withUploadFile fallback
-                }
-                throw failure
-            }
-            val copied = listChildren(parentId).firstOrNull { it.name == name }
-                ?: throw DriveApiException("OneDrive did not confirm the copied item")
-            val copiedDigest = download(copied).use(::md5)
-            if (!sourceDigest.equals(copiedDigest, true)) throw DriveApiException("OneDrive copy verification failed")
-            copied
+            )
         }
     }
 
@@ -425,22 +441,19 @@ class OneDriveApi(
             instanceFollowRedirects = false
         }
 
+    private fun sanitizeUrl(url: URL): String = "${url.protocol}://${url.host}${url.path}"
+
     private fun requireSuccess(connection: HttpURLConnection, expected: Set<Int>, authenticatedGraph: Boolean = true) {
         val code = connection.responseCode
         if (code !in expected) {
-            val errorBody = try {
-                connection.errorStream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }
-            } catch (_: Exception) {
-                null
-            }
-            Log.e("OneDriveApi", "HTTP $code for ${connection.requestMethod} ${connection.url}: $errorBody")
+            Log.e("OneDriveApi", "HTTP $code for ${connection.requestMethod} ${sanitizeUrl(connection.url)}")
             if (authenticatedGraph && (code == 401 || code == 403)) throw OneDriveReloginRequired()
             throw DriveApiException(when (code) {
                 401, 403 -> "OneDrive transfer session is no longer available"
                 404 -> "The selected OneDrive item is no longer available"
-                409, 412 -> "OneDrive content changed during sync ($code: ${errorBody.orEmpty()})".trim()
+                409, 412 -> "OneDrive content changed during sync ($code)"
                 429 -> "OneDrive is busy; try again later"
-                else -> "OneDrive request failed ($code: ${errorBody.orEmpty()})".trim()
+                else -> "OneDrive request failed ($code)"
             })
         }
     }

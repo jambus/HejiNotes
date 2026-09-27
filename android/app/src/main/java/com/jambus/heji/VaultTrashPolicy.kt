@@ -21,4 +21,3 @@ object VaultTrashPolicy {
     fun uniqueNoteName(original: String, existingNames: Iterable<String>, suffix: String): String =
         uniqueTrashName(original, existingNames, suffix)
 }
-

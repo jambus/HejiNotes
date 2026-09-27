@@ -118,5 +118,5 @@
   后台继续/取消、令牌失效、冲突和中断恢复；完成前 `0.6.0` 不得标记候选（FR-536）。
 
 上一个 `0.5.0` / `versionCode 9` 基线已在本机通过共享 Vault 契约检查与 debug APK 构建。
-当前 `0.6.0` / `versionCode 12` 已通过 200 项 Android 单测和 fresh debug APK 打包；完成 T568
+当前 `0.6.0` / `versionCode 12` 已通过 249 项 Android 单测和 fresh debug APK 打包；完成 T568
 真实 OneDrive 与 Mate 60 验收后才能进入候选状态。

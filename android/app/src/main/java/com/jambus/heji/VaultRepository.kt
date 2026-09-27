@@ -624,7 +624,16 @@ sealed class InlineAttachmentDeleteResult {
     data class Retained(val message: String, val retryable: Boolean) : InlineAttachmentDeleteResult()
 }
 
-class VaultRepository(private val context: Context, private val fixedVaultUri: Uri? = null) : NoteReadWriter {
+interface SyncVaultAccessor {
+    fun syncFilesStrict(): List<VaultSyncFile>
+    fun openSyncInput(file: VaultSyncFile): InputStream?
+    fun moveSyncFileToTrash(file: VaultSyncFile): VaultMutationResult
+    fun syncMd5(relativePath: String): String?
+    fun writeSyncFile(relativePath: String, mimeType: String?, input: InputStream, expectedCurrentMd5: String? = null): Boolean
+    fun writeSyncFileIfAbsent(relativePath: String, mimeType: String?, input: InputStream): Boolean
+}
+
+class VaultRepository(private val context: Context, private val fixedVaultUri: Uri? = null) : NoteReadWriter, SyncVaultAccessor {
     private val resolver: ContentResolver = context.contentResolver
     private val preferences = context.getSharedPreferences("heji_notes", Context.MODE_PRIVATE)
     private val dailySettings = VaultDailySettingsStore(SharedPreferenceStore(preferences))
@@ -1051,7 +1060,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
      * Moves an ordinary synchronized file (note or asset) into the Vault-root `.trash/`.
      * Used by sync delete reconciliation when a file was deleted on the remote.
      */
-    fun moveSyncFileToTrash(file: VaultSyncFile): VaultMutationResult {
+    override fun moveSyncFileToTrash(file: VaultSyncFile): VaultMutationResult {
         if (!SyncPathPolicy.isAllowed(file.relativePath, false)) {
             return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
         }
@@ -1679,19 +1688,19 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
     }
 
     /** Strict scan for plans that may create remote recycle-bin operations. */
-    fun syncFilesStrict(): List<VaultSyncFile> {
+    override fun syncFilesStrict(): List<VaultSyncFile> {
         val tree = savedVaultUri() ?: throw SecurityException("Vault permission unavailable")
         return scanSyncDirectory(tree, rootDocument(tree))
     }
 
-    fun openSyncInput(file: VaultSyncFile): InputStream? = try {
+    override fun openSyncInput(file: VaultSyncFile): InputStream? = try {
         resolver.openInputStream(file.document.uri)
     } catch (_: Exception) {
         null
     }
 
     /** Rechecks the current file immediately before a sync applies a remote replacement. */
-    fun syncMd5(relativePath: String): String? {
+    override fun syncMd5(relativePath: String): String? {
         return try {
             val tree = savedVaultUri() ?: return null
             val document = findByRelativePath(tree, relativePath) ?: return null
@@ -1700,7 +1709,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
     }
 
     /** Writes a downloaded file with the same recoverable replace protocol as note saving. */
-    fun writeSyncFile(relativePath: String, mimeType: String?, input: InputStream, expectedCurrentMd5: String? = null): Boolean {
+    override fun writeSyncFile(relativePath: String, mimeType: String?, input: InputStream, expectedCurrentMd5: String?): Boolean {
         val cleanPath = safeSyncPath(relativePath) ?: return false
         val tree = savedVaultUri() ?: return false
         val parts = cleanPath.split('/')
@@ -1745,7 +1754,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
      * Commits a remote-only download only if a local file has not appeared since the scan.
      * This deliberately fails closed: the caller must keep the remote version as a conflict copy.
      */
-    fun writeSyncFileIfAbsent(relativePath: String, mimeType: String?, input: InputStream): Boolean {
+    override fun writeSyncFileIfAbsent(relativePath: String, mimeType: String?, input: InputStream): Boolean {
         val cleanPath = safeSyncPath(relativePath) ?: return false
         val tree = savedVaultUri() ?: return false
         val parts = cleanPath.split('/')

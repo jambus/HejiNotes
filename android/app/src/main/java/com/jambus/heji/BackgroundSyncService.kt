@@ -254,11 +254,11 @@ class BackgroundSyncService : Service() {
                 .sync(request.root)
         }
     } catch (e: OneDriveReloginRequired) {
-        Log.w(TAG, "OneDrive sync requires re-login: ${e.message}", e)
+        Log.w(TAG, "OneDrive sync requires re-login")
         OneDriveSyncPreferences(this).markReloginRequired(request.vaultId)
         SyncRunResult(0, 0, 0, 0, listOf(getString(R.string.onedrive_account_relogin_required)), false)
     } catch (e: Exception) {
-        Log.e(TAG, "OneDrive sync failed: ${e.message}", e)
+        Log.e(TAG, "OneDrive sync failed: ${e.javaClass.simpleName}")
         SyncRunResult(0, 0, 0, 0, listOf(getString(R.string.onedrive_sync_connection_failed)), false)
     }
 
@@ -287,7 +287,7 @@ class BackgroundSyncService : Service() {
             }.sync(request.root)
         }
     } catch (e: Exception) {
-        Log.e(TAG, "Google Drive sync failed: ${e.message}", e)
+        Log.e(TAG, "Google Drive sync failed: ${e.javaClass.simpleName}")
         DriveSyncResult(0, 0, 0, 0, listOf(getString(R.string.drive_sync_connection_failed)), false)
     }
 

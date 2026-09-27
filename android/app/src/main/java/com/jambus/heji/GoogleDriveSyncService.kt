@@ -171,7 +171,7 @@ private data class LocalFileSnapshot(
 )
 
 class RemoteDriveSyncEngine(
-    private val repository: VaultRepository,
+    private val repository: SyncVaultAccessor,
     private val api: DriveGateway,
     private val vaultId: String = "",
     private val accountId: String = "",
@@ -181,7 +181,7 @@ class RemoteDriveSyncEngine(
     private val onProgress: (SyncProgress) -> Unit = {}
 ) {
     constructor(
-        repository: VaultRepository,
+        repository: SyncVaultAccessor,
         api: DriveGateway,
         vaultId: String = "",
         accountId: String = "",
@@ -347,7 +347,7 @@ class RemoteDriveSyncEngine(
                     }
                 }
             } catch (failure: Exception) {
-                Log.e("RemoteDriveSync", "File sync failed for $path: ${failure.message}", failure)
+                Log.e("RemoteDriveSync", "File sync failed: ${failure.javaClass.simpleName}")
                 if (failure is OneDriveReloginRequired) throw failure
                 errors += "$path: ${userMessage(failure)}"
             }
@@ -367,7 +367,7 @@ class RemoteDriveSyncEngine(
                     }
                 }
             } catch (failure: Exception) {
-                Log.e("RemoteDriveSync", "Apply committed move failed for change ${change.id}: ${failure.message}", failure)
+                Log.e("RemoteDriveSync", "Apply committed move failed: ${failure.javaClass.simpleName}")
                 if (failure is OneDriveReloginRequired) throw failure
                 val representativePath = change.sourceToTarget.keys.firstOrNull { it.endsWith(".md", true) }
                     ?: change.sourceToTarget.keys.firstOrNull().orEmpty()
@@ -419,7 +419,7 @@ class RemoteDriveSyncEngine(
                     }
                 }
             } catch (failure: Exception) {
-                Log.e("RemoteDriveSync", "Remote file processing failed for $path: ${failure.message}", failure)
+                Log.e("RemoteDriveSync", "Remote item processing failed: ${failure.javaClass.simpleName}")
                 if (failure is OneDriveReloginRequired) throw failure
                 errors += "$path: ${userMessage(failure)}"
             }
