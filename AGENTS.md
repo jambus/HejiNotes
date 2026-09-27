@@ -2,10 +2,12 @@
 
 ## Agent Routing, Review, and Git Control
 
-Use **Sol with medium reasoning effort** as the primary coordinator and default
-model for core tasks. It owns scope, integration, validation, and the final
-report; delegating work never transfers that accountability. Do not use Terra as
-a default or required model.
+Use **GPT-5.6 Sol with medium reasoning effort** as the primary coordinator and
+default model for routine core tasks. It owns scope, integration, validation,
+and the final report; delegating work never transfers that accountability. For
+exceptionally complex problems or situations, use **GPT-6 Astra with medium
+reasoning effort** as the primary coordinator. Do not use Terra as a default or
+required model.
 
 Apply an environment gate before selecting a model:
 
@@ -21,29 +23,35 @@ Apply an environment gate before selecting a model:
 
 Select the model and reasoning level deliberately:
 
-- **Sol, `medium`:** the default for core tasks, including ordinary
-  implementation, focused tests, coordination, validation, and final reporting.
-- **Sol, `high` or Astra, `medium`:** architecture, hard bugs, migrations,
-  unresolved lifecycle or persistence issues, security, Vault-contract changes,
-  compatibility, and other measured high-complexity work.
-- **Luna, `max`:** questions, read-only checks, small documentation edits,
+- **GPT-5.6 Sol, `medium`:** the default for routine core tasks, including
+  ordinary implementation, focused tests, coordination, validation, and final
+  reporting.
+- **GPT-5.6 Sol, `medium` or GPT-6 Astra, `low`:** architecture, design review,
+  hard bugs, migrations, unresolved lifecycle or persistence issues, security,
+  Vault-contract changes, compatibility, and other work that benefits from
+  deeper review but is not exceptionally complex.
+- **GPT-6 Astra, `medium`:** exceptionally complex problems or situations whose
+  architecture, risk, ambiguity, or cross-system effects exceed the normal
+  architecture route.
+- **GPT-6 Luna, `max`:** questions, read-only checks, small documentation edits,
   inventories, formatting, boilerplate, test-data preparation, and other simple
   or bounded mechanical work. `max` is Luna's highest available reasoning level.
 - **Gemini 3.8 Flash, only in a Google ecosystem IDE:** an optional executor for
   clearly scoped, low-risk implementation or mechanical tasks with named files,
   fixed acceptance criteria, and exact validation commands. It does not own
   architecture, scope, integration, high-risk review, or the final report. If
-  it is unavailable or the environment is Codex or unknown, use Luna at `max`
-  for simple work or Sol at `medium` for core implementation.
+  it is unavailable or the environment is Codex or unknown, use GPT-6 Luna at
+  `max` for simple work or GPT-5.6 Sol at `medium` for core implementation.
 
 Before starting an implementation task, classify its risk and explicitly state
 one execution mode in the first progress update; file count alone is not a risk
 signal.
 
-- **Simple mode (default; L0 or L1):** Use one agent only. Luna at `max` handles
-  L0 work. Sol at `medium` performs L1 discovery, implementation, affected
-  tests, and the final report. Do not create sub-agents or request a separate
-  review unless the user asks for one or the task is reclassified.
+- **Simple mode (default; L0 or L1):** Use one agent only. GPT-6 Luna at `max`
+  handles L0 work. GPT-5.6 Sol at `medium` performs L1 discovery,
+  implementation, affected tests, and the final report. Do not create
+  sub-agents or request a separate review unless the user asks for one or the
+  task is reclassified.
 - **Google IDE Gemini-assisted mode (L1 or L2 only):** In a confirmed Google
   ecosystem IDE, Gemini 3.8 Flash may execute one or more independent bounded
   tasks. State the coordinator, executor, and file ownership before handoff. The
@@ -57,10 +65,10 @@ signal.
 
 | Level | Scope | Required workflow |
 | --- | --- | --- |
-| L0 | Questions, read-only work, typo fixes, isolated documentation | Simple mode: Luna at `max` only; no sub-agent. |
-| L1 | Local UI or pure-logic change without persistence, permissions, or contract effects | Simple mode: Sol at `medium` implements and runs focused tests. In a confirmed Google ecosystem IDE only, Gemini 3.8 Flash may execute a bounded portion, with the coordinator reviewing and validating it. |
-| L2 | Multi-screen or substantial user-visible feature without Vault/sync/concurrency risk | Multi-agent mode: Sol at `high` or Astra at `medium` provides a short read-only design review; Sol at `medium` implements and validates. In a confirmed Google ecosystem IDE only, the coordinator may assign independent bounded execution units to Gemini 3.8 Flash; the original reviewer performs final review. |
-| L3 | Vault data, deletes, permissions, sync, concurrency, migrations, cross-client contracts, or security | Multi-agent mode: Sol at `high` or Astra at `medium` reviewer → Sol at `medium` developer → independent Sol at `medium` tester → original reviewer. |
+| L0 | Questions, read-only work, typo fixes, isolated documentation | Simple mode: GPT-6 Luna at `max` only; no sub-agent. |
+| L1 | Local UI or pure-logic change without persistence, permissions, or contract effects | Simple mode: GPT-5.6 Sol at `medium` implements and runs focused tests. In a confirmed Google ecosystem IDE only, Gemini 3.8 Flash may execute a bounded portion, with the coordinator reviewing and validating it. |
+| L2 | Multi-screen or substantial user-visible feature without Vault/sync/concurrency risk | Multi-agent mode: GPT-5.6 Sol at `medium` or GPT-6 Astra at `low` provides a short read-only design review; GPT-5.6 Sol at `medium` implements and validates. In a confirmed Google ecosystem IDE only, the coordinator may assign independent bounded execution units to Gemini 3.8 Flash; the original reviewer performs final review. |
+| L3 | Vault data, deletes, permissions, sync, concurrency, migrations, cross-client contracts, or security | Multi-agent mode: GPT-5.6 Sol at `medium` or GPT-6 Astra at `low` reviewer → GPT-5.6 Sol at `medium` developer → independent GPT-5.6 Sol at `medium` tester → original reviewer. When the problem or situation is exceptionally complex, GPT-6 Astra at `medium` becomes the coordinator and reviewer. |
 
 For L2 and L3, the developer updates design, contract, spec, plan, and task
 documents before implementation when the change affects them. Reviewer findings
