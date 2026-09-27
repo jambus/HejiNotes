@@ -17,7 +17,8 @@ data class SyncRunResult(
     val unchanged: Int,
     val conflicts: Int,
     val errors: List<String>,
-    val cancelled: Boolean
+    val cancelled: Boolean,
+    val deleted: Int = 0
 ) {
     val isSuccessful: Boolean get() = errors.isEmpty() && !cancelled
 }
@@ -120,6 +121,49 @@ internal object SyncItemComparisonPolicy {
     }
 }
 
+internal enum class SyncLocalOnlyAction {
+    UPLOAD,
+    MOVE_TO_TRASH
+}
+
+internal enum class SyncRemoteOnlyAction {
+    DOWNLOAD,
+    MOVE_TO_TRASH
+}
+
+internal object SyncDeleteReconciliationPolicy {
+    fun evaluateLocalOnly(
+        localSha256: String?,
+        baseline: DriveBaselineFile?
+    ): SyncLocalOnlyAction {
+        if (baseline == null) return SyncLocalOnlyAction.UPLOAD
+        val localUnchanged = localSha256 != null && baseline.localSha256.equals(localSha256, true)
+        return if (localUnchanged) SyncLocalOnlyAction.MOVE_TO_TRASH else SyncLocalOnlyAction.UPLOAD
+    }
+
+    fun evaluateRemoteOnly(
+        remoteId: String,
+        remoteRevision: String?,
+        remoteVersion: Long?,
+        remoteMd5: String?,
+        baseline: DriveBaselineFile?,
+        remoteHashSupplier: () -> String?
+    ): SyncRemoteOnlyAction {
+        if (baseline == null) return SyncRemoteOnlyAction.DOWNLOAD
+        val remoteRevisionMatches = baseline.remoteId == remoteId &&
+            ((baseline.remoteRevision != null && baseline.remoteRevision == remoteRevision) ||
+             (baseline.remoteVersion != null && baseline.remoteVersion == remoteVersion))
+        val remoteChanged = if (remoteRevisionMatches) {
+            false
+        } else {
+            val remoteHash = remoteMd5 ?: remoteHashSupplier()
+            baseline.remoteId != remoteId || baseline.remoteMd5 == null || remoteHash == null || !baseline.remoteMd5.equals(remoteHash, true)
+        }
+        return if (!remoteChanged) SyncRemoteOnlyAction.MOVE_TO_TRASH else SyncRemoteOnlyAction.DOWNLOAD
+    }
+}
+
+
 private data class LocalFileSnapshot(
     val digests: LocalFileDigests,
     val lastModified: Long?,
@@ -195,19 +239,41 @@ class RemoteDriveSyncEngine(
         var downloaded = 0
         var unchanged = 0
         var conflicts = 0
+        var deleted = 0
         val completedChangeIds = mutableListOf<String>()
         val total = localFiles.size + remoteFiles.keys.minus(localFiles.keys).size
         var completed = 0
 
         localFiles.toSortedMap().forEach { (path, local) ->
-            if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true)
+            if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
             val remote = remoteFiles[path]
             try {
                 when {
                     remote == null -> {
-                        report(completed, total, "正在上传 $path")
-                        upload(path, local, remoteFolders)
-                        uploaded++
+                        val base = baseline[path]
+                        val action = SyncDeleteReconciliationPolicy.evaluateLocalOnly(
+                            localSha256 = localSha256[path],
+                            baseline = base
+                        )
+                        when (action) {
+                            SyncLocalOnlyAction.UPLOAD -> {
+                                report(completed, total, "正在上传 $path")
+                                upload(path, local, remoteFolders)
+                                uploaded++
+                            }
+                            SyncLocalOnlyAction.MOVE_TO_TRASH -> {
+                                report(completed, total, "远端已删除，本地移入回收站：$path")
+                                val trashResult = repository.moveSyncFileToTrash(local)
+                                if (trashResult is VaultMutationResult.Success) {
+                                    localSnapshots.remove(path)
+                                    localDigests.remove(path)
+                                    deleted++
+                                } else {
+                                    val kind = (trashResult as? VaultMutationResult.Failure)?.kind
+                                    errors += "$path: 本地移入回收站失败: $kind"
+                                }
+                            }
+                        }
                     }
                     remote.md5 != null && remote.md5.equals(localMd5[path], true) -> {
                         unchanged++
@@ -288,10 +354,10 @@ class RemoteDriveSyncEngine(
             completed++
             report(completed, total, "已比较 $completed / $total")
         }
-        if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true)
+        if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
 
         sortedChanges.forEachIndexed { changeIdx, change ->
-            if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true)
+            if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
             try {
                 when (applyCommittedMove(change, changeIdx, sortedChanges, baseline, root, localFiles, remoteFolders)) {
                     MoveApplyResult.COMPLETED -> completedChangeIds += change.id
@@ -312,40 +378,58 @@ class RemoteDriveSyncEngine(
                 }
             }
         }
-        if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true)
+        if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
 
         remoteFiles.toSortedMap().forEach { (path, remote) ->
             if (localFiles.containsKey(path)) return@forEach
             if (path in moveSources) return@forEach
-            if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true)
+            if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
             try {
-                report(completed, total, "正在下载 $path")
-                val downloadedToOriginalPath = api.download(remote).use { input ->
-                    repository.writeSyncFileIfAbsent(path, remote.mimeType, input)
-                }
-                if (downloadedToOriginalPath) {
-                    downloaded++
-                } else {
-                    val remoteConflictPath = conflictPath(path, providerName, conflictStamp())
-                    val preserved = api.download(remote).use { input ->
-                        repository.writeSyncFileIfAbsent(remoteConflictPath, remote.mimeType, input)
+                val base = baseline[path]
+                val action = SyncDeleteReconciliationPolicy.evaluateRemoteOnly(
+                    remoteId = remote.id,
+                    remoteRevision = remote.revision,
+                    remoteVersion = remote.version,
+                    remoteMd5 = remote.md5,
+                    baseline = base,
+                    remoteHashSupplier = { md5(api.download(remote)) }
+                )
+                when (action) {
+                    SyncRemoteOnlyAction.DOWNLOAD -> {
+                        report(completed, total, "正在下载 $path")
+                        val downloadedToOriginalPath = api.download(remote).use { input ->
+                            repository.writeSyncFileIfAbsent(path, remote.mimeType, input)
+                        }
+                        if (downloadedToOriginalPath) {
+                            downloaded++
+                        } else {
+                            val remoteConflictPath = conflictPath(path, providerName, conflictStamp())
+                            val preserved = api.download(remote).use { input ->
+                                repository.writeSyncFileIfAbsent(remoteConflictPath, remote.mimeType, input)
+                            }
+                            if (!preserved) throw IllegalStateException("Unable to preserve remote conflict copy")
+                            conflicts++
+                            report(completed, total, "本地文件在同步期间发生变化，已保留冲突副本：$path")
+                        }
                     }
-                    if (!preserved) throw IllegalStateException("Unable to preserve remote conflict copy")
-                    conflicts++
-                    report(completed, total, "本地文件在同步期间发生变化，已保留冲突副本：$path")
+                    SyncRemoteOnlyAction.MOVE_TO_TRASH -> {
+                        report(completed, total, "本地已删除，远端移入回收站：$path")
+                        api.trash(remote.id, remote.revision)
+                        deleted++
+                    }
                 }
             } catch (failure: Exception) {
-                Log.e("RemoteDriveSync", "Remote file download failed for $path: ${failure.message}", failure)
+                Log.e("RemoteDriveSync", "Remote file processing failed for $path: ${failure.message}", failure)
                 if (failure is OneDriveReloginRequired) throw failure
                 errors += "$path: ${userMessage(failure)}"
             }
             completed++
             report(completed, total, "已比较 $completed / $total")
         }
-        if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true)
-        val outcome = result(uploaded, downloaded, unchanged, conflicts, errors, false)
+        if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
+        val outcome = result(uploaded, downloaded, unchanged, conflicts, errors, false, deleted)
         if (outcome.isSuccessful && baselineStore != null) {
-            if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true)
+            if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
             val baselineSaved = try {
                 saveBaseline(root, localSnapshots)
             } catch (failure: Exception) {
@@ -353,11 +437,11 @@ class RemoteDriveSyncEngine(
                 BaselineSaveResult.FAILED
             }
             if (baselineSaved == BaselineSaveResult.CANCELLED) {
-                return result(uploaded, downloaded, unchanged, conflicts, errors, true)
+                return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
             }
-            if (baselineSaved == BaselineSaveResult.FAILED) return SyncRunResult(uploaded, downloaded, unchanged, conflicts, listOf("无法保存同步基线"), false)
+            if (baselineSaved == BaselineSaveResult.FAILED) return SyncRunResult(uploaded, downloaded, unchanged, conflicts, listOf("无法保存同步基线"), false, deleted)
             completedChangeIds.forEach { id ->
-                if (changeStore?.acknowledge(id, api.providerId) != true) return SyncRunResult(uploaded, downloaded, unchanged, conflicts, listOf("无法确认本地搬运历史"), false)
+                if (changeStore?.acknowledge(id, api.providerId) != true) return SyncRunResult(uploaded, downloaded, unchanged, conflicts, listOf("无法确认本地搬运历史"), false, deleted)
             }
         }
         return outcome
@@ -611,8 +695,8 @@ class RemoteDriveSyncEngine(
     private fun report(completed: Int, total: Int, message: String) = onProgress(SyncProgress(completed, total, message))
 
     private fun result(
-        uploaded: Int, downloaded: Int, unchanged: Int, conflicts: Int, errors: List<String>, cancelled: Boolean
-    ) = SyncRunResult(uploaded, downloaded, unchanged, conflicts, errors, cancelled)
+        uploaded: Int, downloaded: Int, unchanged: Int, conflicts: Int, errors: List<String>, cancelled: Boolean, deleted: Int = 0
+    ) = SyncRunResult(uploaded, downloaded, unchanged, conflicts, errors, cancelled, deleted)
 
     private fun userMessage(failure: Exception): String = when (failure) {
         is DriveApiException -> failure.message ?: "$providerName request failed"

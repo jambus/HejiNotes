@@ -27,7 +27,8 @@ data class SyncTaskSummary(
     val uploaded: Int = 0,
     val downloaded: Int = 0,
     val unchanged: Int = 0,
-    val conflicts: Int = 0
+    val conflicts: Int = 0,
+    val deleted: Int = 0
 )
 
 /**
@@ -121,7 +122,7 @@ class SyncTaskStateStore(context: Context) {
         },
         messageCode = finishMessageCode(result),
         finishedAt = System.currentTimeMillis(),
-        summary = SyncTaskSummary(result.uploaded, result.downloaded, result.unchanged, result.conflicts),
+        summary = SyncTaskSummary(result.uploaded, result.downloaded, result.unchanged, result.conflicts, result.deleted),
         errors = result.errors.take(MAX_ERROR_DETAILS).map { SyncErrorDetail(SyncErrorCode.ITEM_FAILED, safePath(it)) },
         errorCount = result.errors.size
     )?.also(::save)
@@ -160,6 +161,7 @@ class SyncTaskStateStore(context: Context) {
         put("downloaded", value.summary.downloaded)
         put("unchanged", value.summary.unchanged)
         put("conflicts", value.summary.conflicts)
+        put("deleted", value.summary.deleted)
         put("errors", JSONArray(value.errors.map { JSONObject().put("code", it.code.name).put("path", it.path) }))
         put("errorCount", value.errorCount)
         put("vaultId", value.vaultId)
@@ -187,7 +189,8 @@ class SyncTaskStateStore(context: Context) {
             finishedAt = value.optLong("finishedAt"),
             summary = SyncTaskSummary(
                 value.optInt("uploaded"), value.optInt("downloaded"),
-                value.optInt("unchanged"), value.optInt("conflicts")
+                value.optInt("unchanged"), value.optInt("conflicts"),
+                value.optInt("deleted")
             ),
             errors = (value.optJSONArray("errors") ?: JSONArray()).let { errors ->
                 List(errors.length()) { index -> errors.optJSONObject(index) }.filterNotNull().mapNotNull { error ->

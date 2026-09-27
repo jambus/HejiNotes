@@ -210,4 +210,9 @@ provider is first connected after the local move and therefore has no source bas
 the move only by comparing the remote source with the recorded pre-move SHA-256. An unchanged source
 can enter that provider's recycle bin after the target is verified; a changed source is first
 preserved as local and remote conflict copies. Missing fingerprints or uncertain copies fail closed.
-General deletes do not propagate through this move rule.
+
+Ordinary file deletes propagate bidirectionally using three-way baseline reconciliation:
+- If a file is absent remotely but present locally: if the local file hash matches the last successful baseline, the remote deletion is applied locally by moving the file into the Vault-root `.trash/`; if the local file was modified after the baseline, the local modification is preserved and re-uploaded.
+- If a file is absent locally but present remotely (and not part of an unacknowledged `MoveBundle`): if the remote file revision/hash matches the last successful baseline, the local deletion is applied remotely by moving the item into the provider recycle bin (e.g. OneDrive recycle bin or Google Drive trash); if the remote item was modified after the baseline, the remote modification is preserved and downloaded.
+- Deletions are never permanent in either direction during sync reconciliation. Items moved to `.trash/` or cloud recycle bins are excluded from subsequent sync scans and omitted from subsequent committed baselines.
+

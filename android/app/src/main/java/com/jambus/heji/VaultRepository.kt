@@ -1048,6 +1048,40 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
     }
 
     /**
+     * Moves an ordinary synchronized file (note or asset) into the Vault-root `.trash/`.
+     * Used by sync delete reconciliation when a file was deleted on the remote.
+     */
+    fun moveSyncFileToTrash(file: VaultSyncFile): VaultMutationResult {
+        if (!SyncPathPolicy.isAllowed(file.relativePath, false)) {
+            return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
+        }
+        val document = file.document
+        val sourceParent = document.parentUri ?: return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
+        return try {
+            val tree = savedVaultUri() ?: return VaultMutationResult.Failure(VaultMutationFailureKind.PERMISSION_DENIED)
+            val trash = findOrCreateDirectory(tree, listOf(".trash"))
+                ?: return VaultMutationResult.Failure(VaultMutationFailureKind.CREATE_FAILED)
+            val moved = try {
+                DocumentsContract.moveDocument(resolver, document.uri, sourceParent, trash)
+            } catch (error: SecurityException) {
+                throw error
+            } catch (_: Exception) {
+                null
+            }
+            if (moved != null) {
+                val resolved = resolveMutationDocument(trash, ".trash", moved)
+                return VaultMutationResult.Success(resolved, document.name, resolved?.name)
+            }
+            moveNoteToTrashByCopy(tree, document, trash)
+        } catch (_: SecurityException) {
+            VaultMutationResult.Failure(VaultMutationFailureKind.PERMISSION_DENIED)
+        } catch (_: Exception) {
+            VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
+        }
+    }
+
+
+    /**
      * Moves a Markdown note and its exclusive attachment bundle. This deliberately has no
      * copy/delete fallback: a provider that cannot atomically move either object leaves the
      * source available for a retry.
@@ -2093,7 +2127,8 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
             existing,
             SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         )
-        val copy = DocumentsContract.createDocument(resolver, trash, "text/markdown", fallbackName)
+        val mimeType = document.mimeType ?: if (document.name.endsWith(".md", true)) "text/markdown" else "application/octet-stream"
+        val copy = DocumentsContract.createDocument(resolver, trash, mimeType, fallbackName)
             ?: return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
         return try {
             resolver.openInputStream(document.uri)?.use { input ->

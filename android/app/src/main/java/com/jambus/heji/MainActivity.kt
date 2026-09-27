@@ -1274,7 +1274,7 @@ class MainActivity : Activity() {
             } else {
                 val syncSnapshot = currentSyncSnapshot()
                 content.addView(TextView(this).apply {
-                    text = "同步会比较 Markdown 和 assets；不会同步 .obsidian、.trash，也不会传播删除。"
+                    text = "同步会比较 Markdown 和 assets；不会同步 .obsidian、.trash。删除采用双向可恢复同步（移入本地 .trash 或网盘回收站）。"
                     textSize = 13f
                     setTextColor(COLOR_MUTED_TEXT)
                     setPadding(dp(6), dp(2), dp(6), dp(14))
@@ -1508,7 +1508,7 @@ class MainActivity : Activity() {
             setTextColor(COLOR_PRIMARY_TEXT)
         }, matchWrap())
         content.addView(TextView(this).apply {
-            text = "本地 Vault：$currentVaultName\nGoogle Drive：${rootSelection.name}\n\n将比较 Markdown 与 assets。.obsidian、.trash、临时文件和本机同步信息不会上传。\n\n同步会在后台继续运行；开始后可立即返回文件库继续阅读或编辑。完成或失败会通过通知提醒，并可在设置中查看详情。\n\n同名但内容不同的文件会各保留一份冲突副本；本阶段不会删除任何一端的文件。"
+            text = "本地 Vault：$currentVaultName\nGoogle Drive：${rootSelection.name}\n\n将比较 Markdown 与 assets。.obsidian、.trash、临时文件和本机同步信息不会上传。\n\n同步会在后台继续运行；开始后可立即返回文件库继续阅读或编辑。完成或失败会通过通知提醒，并可在设置中查看详情。\n\n同名但内容不同的文件会各保留一份冲突副本；删除采用双向可恢复同步（移入本地 .trash 或网盘回收站）。"
             textSize = 15f
             setTextColor(COLOR_SECONDARY_TEXT)
             setPadding(0, dp(12), 0, dp(22))

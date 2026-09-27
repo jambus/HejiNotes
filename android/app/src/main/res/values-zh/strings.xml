@@ -58,7 +58,7 @@
     <string name="onedrive_change_while_running">同步正在运行，完成后才能更换 OneDrive 目录。</string>
     <string name="onedrive_pending_move">存在尚未确认的本地搬运，请先完成或重试同步后再更换 OneDrive 目录。</string>
     <string name="onedrive_selected">已选择 %1$s。同步前仍会再次确认范围。</string>
-    <string name="onedrive_confirmation">本地 Vault：%1$s\nOneDrive：%2$s\n\n将比较 Markdown 与 assets；.obsidian、.trash、临时文件和本机同步信息不会上传。\n\n同步会在后台继续运行。同名不同内容会保留冲突副本；当前阶段不传播普通删除。</string>
+    <string name="onedrive_confirmation">本地 Vault：%1$s\nOneDrive：%2$s\n\n将比较 Markdown 与 assets；.obsidian、.trash、临时文件和本机同步信息不会上传。\n\n同步会在后台继续运行。同名不同内容会保留冲突副本；删除采用双向可恢复同步（移入本地 .trash 或网盘回收站）。</string>
     <string name="onedrive_local_vault_unavailable">无法访问本地 Vault，请重新选择后再同步。</string>
     <string name="onedrive_sync_started">OneDrive 同步已在后台开始，你可以继续编辑本地文件。</string>
     <string name="onedrive_sync_selection_missing">尚未选择 OneDrive Vault</string>

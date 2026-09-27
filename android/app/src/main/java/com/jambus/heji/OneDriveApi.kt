@@ -236,7 +236,7 @@ class OneDriveApi(
     override fun trash(id: String, expectedEtag: String?) {
         withGraphConnection("DELETE", "$GRAPH/me/drive/items/${path(id)}") { connection ->
             expectedEtag?.let { connection.setRequestProperty("If-Match", it) }
-            requireSuccess(connection, setOf(204))
+            requireSuccess(connection, setOf(204, 404))
         }
     }
 

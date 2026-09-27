@@ -58,7 +58,7 @@
     <string name="onedrive_change_while_running">Sync is running. Change the OneDrive folder after it finishes.</string>
     <string name="onedrive_pending_move">A local move is not yet acknowledged. Complete or retry sync before changing the OneDrive folder.</string>
     <string name="onedrive_selected">Selected %1$s. The scope will be confirmed again before sync.</string>
-    <string name="onedrive_confirmation">Local Vault: %1$s\nOneDrive: %2$s\n\nHeji will compare Markdown and assets. .obsidian, .trash, temporary files, and local sync metadata are excluded.\n\nSync continues in the background. Conflicting content is preserved as a separate copy; ordinary deletes are not propagated in this slice.</string>
+    <string name="onedrive_confirmation">Local Vault: %1$s\nOneDrive: %2$s\n\nHeji will compare Markdown and assets. .obsidian, .trash, temporary files, and local sync metadata are excluded.\n\nSync continues in the background. Conflicting content is preserved as a separate copy; deletions propagate bidirectionally into the local .trash/ or provider recycle bin.</string>
     <string name="onedrive_local_vault_unavailable">The local Vault is unavailable. Choose it again before syncing.</string>
     <string name="onedrive_sync_started">OneDrive sync started in the background. You can continue editing local files.</string>
     <string name="onedrive_sync_selection_missing">No OneDrive Vault is selected</string>

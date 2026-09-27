@@ -24,4 +24,13 @@ class VaultTrashPolicyTest {
             VaultTrashPolicy.uniqueNoteName("meeting.MD", listOf("meeting.md"), "20260830-120000")
         )
     }
+
+    @Test
+    fun `image asset fallback preserves non-markdown extension`() {
+        assertEquals(
+            "photo-20260830-120000.png",
+            VaultTrashPolicy.uniqueTrashName("photo.png", listOf("photo.png"), "20260830-120000")
+        )
+    }
+
 }
