@@ -28,4 +28,14 @@ class VaultMutationResultTest {
         assertEquals(null, result.actualName)
         assertEquals(DailyDirectoryChange.RESET_TO_ROOT, result.dailyDirectoryChange)
     }
+
+    @Test
+    fun `precondition failure represents concurrent modification during mutation`() {
+        val result = VaultMutationResult.Failure(
+            VaultMutationFailureKind.PRECONDITION_FAILED,
+            "File was modified locally"
+        )
+        assertEquals(VaultMutationFailureKind.PRECONDITION_FAILED, result.kind)
+        assertNotEquals(VaultMutationFailureKind.MOVE_UNSUPPORTED, result.kind)
+    }
 }

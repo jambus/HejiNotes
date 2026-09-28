@@ -33,11 +33,16 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
 
 ### 当前验证
 
-- Android 249 项本地单元测试通过（`0 failure / 0 error / 0 skip`），包含 OneDrive Vault 绑定
+- Android 276 项本地单元测试通过（`0 failure / 0 error / 0 skip`），包含 OneDrive Vault 绑定
   隔离、Provider 分区 MoveBundle 确认、传输中取消、条件写入 header、启动 tuple 拒绝、Graph
-  continuation/upload/download URL 信任边界、预授权 URL/日志脱敏、Activity 生命周期门禁、
-  核心同步引擎集成测试（MoveBundle 确认门禁、冲突采纳前置验证、原子取消基线、重新登录传播）
-  以及 OneDrive 复制故障注入重试幂等性；`0.6.0` fresh debug APK 已成功构建。
+  continuation/upload/download URL 信任边界、主机级脱敏 URL 策略、Activity 生命周期门禁、
+  核心同步引擎集成测试（MoveBundle 确认门禁、冲突采纳前置验证、原子取消基线、重新登录传播、
+  扫描后本地编辑保留与上传、远端删除 ETag 并发校验）、OneDrive 复制故障注入重试幂等性、
+  VaultSaveLock 编辑与删除互斥门禁、流式大文件回收与摘要比对、Fail-Closed 事务标记、
+  待定标记排重保证目标文件名唯一、TARGET_CREATED 中断恢复通过 targetTrashName 定位并安全清理、
+  清理失败时保留记录防御僵尸文件、严格区分“确认不存在”与“状态未知”（SourceState 严格检查，
+  权限/Provider 异常保留副本与标记且不推进同步基线）、以及 Verified 垃圾箱事务复制与启动恢复策略；
+  `0.6.0` fresh debug APK 已成功构建。
 - 真实 Entra 应用配置、个人/组织账号登录、Mate 60 登录回调、大文件、弱网、授权撤销与双设备
   冲突仍待验收，因此本版本不是候选或正式发布。
 

@@ -262,15 +262,29 @@ class RemoteDriveSyncEngine(
                                 uploaded++
                             }
                             SyncLocalOnlyAction.MOVE_TO_TRASH -> {
-                                report(completed, total, "远端已删除，本地移入回收站：$path")
-                                val trashResult = repository.moveSyncFileToTrash(local)
-                                if (trashResult is VaultMutationResult.Success) {
-                                    localSnapshots.remove(path)
-                                    localDigests.remove(path)
-                                    deleted++
-                                } else {
-                                    val kind = (trashResult as? VaultMutationResult.Failure)?.kind
-                                    errors += "$path: 本地移入回收站失败: $kind"
+                                val expectedSha256 = base?.localSha256.orEmpty()
+                                val trashResult = repository.moveSyncFileToTrashIfUnchanged(local, expectedSha256)
+                                when (trashResult) {
+                                    is VaultMutationResult.Success -> {
+                                        report(completed, total, "远端已删除，本地移入回收站：$path")
+                                        localSnapshots.remove(path)
+                                        localDigests.remove(path)
+                                        deleted++
+                                    }
+                                    is VaultMutationResult.Failure -> {
+                                        if (trashResult.kind == VaultMutationFailureKind.PRECONDITION_FAILED) {
+                                            report(completed, total, "检测到本地修改，保留并上传：$path")
+                                            upload(path, local, remoteFolders)
+                                            val freshDigest = repository.openSyncInput(local)?.let(LocalFileDigestsCalculator::computeDigests)
+                                            if (freshDigest != null) {
+                                                localDigests[path] = freshDigest
+                                                localSnapshots[path] = LocalFileSnapshot(freshDigest, local.document.lastModified, local.document.size)
+                                            }
+                                            uploaded++
+                                        } else {
+                                            errors += "$path: 本地移入回收站失败: ${trashResult.kind}"
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -414,7 +428,14 @@ class RemoteDriveSyncEngine(
                     }
                     SyncRemoteOnlyAction.MOVE_TO_TRASH -> {
                         report(completed, total, "本地已删除，远端移入回收站：$path")
-                        api.trash(remote.id, remote.revision)
+                        val revision = api.revision(remote.id)
+                        val current = revision.item
+                        val currentRevisionMatches = current.revision == remote.revision &&
+                            (current.version == null || remote.version == null || current.version == remote.version)
+                        if (!currentRevisionMatches) {
+                            throw IllegalStateException("$providerName file changed during sync")
+                        }
+                        api.trash(remote.id, revision.etag)
                         deleted++
                     }
                 }

@@ -160,6 +160,14 @@ class OneDrivePolicyTest {
         val decision = OneDriveCopyPolicy.evaluateExisting(target, "hash123") { "different" }
         assertEquals(CopyTargetDecision.CONFLICT_DIFFERENT_CONTENT, decision)
     }
+
+    @Test fun `sanitizeUrl strips path and query parameters returning only host`() {
+        val urlWithParams = java.net.URL("https://graph.microsoft.com/v1.0/me/drive/root:/test.md:/content?token=secret_value")
+        assertEquals("graph.microsoft.com", OneDriveUrlPolicy.sanitizeUrl(urlWithParams))
+
+        val uploadUrl = java.net.URL("https://tenant.sharepoint.com/upload/session/xyz?guid=123")
+        assertEquals("tenant.sharepoint.com", OneDriveUrlPolicy.sanitizeUrl(uploadUrl))
+    }
 }
 
 private class OneDriveMemoryPreferenceStore(

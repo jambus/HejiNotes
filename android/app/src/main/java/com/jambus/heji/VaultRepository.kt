@@ -583,7 +583,8 @@ enum class VaultMutationFailureKind {
     CREATE_FAILED,
     RENAME_FAILED,
     TRASH_NAME_CONFLICT,
-    MOVE_UNSUPPORTED
+    MOVE_UNSUPPORTED,
+    PRECONDITION_FAILED
 }
 
 enum class DailyDirectoryChange { UNCHANGED, REWRITTEN, RESET_TO_ROOT }
@@ -628,6 +629,7 @@ interface SyncVaultAccessor {
     fun syncFilesStrict(): List<VaultSyncFile>
     fun openSyncInput(file: VaultSyncFile): InputStream?
     fun moveSyncFileToTrash(file: VaultSyncFile): VaultMutationResult
+    fun moveSyncFileToTrashIfUnchanged(file: VaultSyncFile, expectedSha256: String): VaultMutationResult
     fun syncMd5(relativePath: String): String?
     fun writeSyncFile(relativePath: String, mimeType: String?, input: InputStream, expectedCurrentMd5: String? = null): Boolean
     fun writeSyncFileIfAbsent(relativePath: String, mimeType: String?, input: InputStream): Boolean
@@ -906,6 +908,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
             recoverPreparedLocalChanges(tree)
             if (!recoverNoteBundleMoves(tree) || hasUnresolvedMoveTransactions()) return VaultRecoveryResult.Failure(VaultFailureKind.READ_FAILED)
             recoverInlineAttachmentDeletes(tree)
+            recoverTrashCopyMoves(tree)
             VaultRecoveryResult.Success
         } catch (_: SecurityException) {
             VaultRecoveryResult.Failure(VaultFailureKind.PERMISSION_DENIED)
@@ -939,45 +942,46 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
     override fun saveTextIfUnchanged(document: VaultDocument, content: String, expectedSha256: String): Boolean =
         saveTextInternal(document, content, expectedSha256)
 
-    private fun saveTextInternal(document: VaultDocument, content: String, expectedSha256: String?): Boolean {
-        val parent = document.parentUri ?: return false
-        val tempName = ".markbook-${UUID.randomUUID()}.tmp"
-        val temp = DocumentsContract.createDocument(resolver, parent, "text/plain", tempName)
-            ?: return false
-        var backup: Uri? = null
-        return try {
-            resolver.openOutputStream(temp, "wt")?.use { output ->
-                output.write(content.toByteArray(StandardCharsets.UTF_8))
-                output.flush()
-            } ?: throw IllegalStateException("Unable to open temporary note")
-
-            if (expectedSha256 != null) {
-                val current = readText(document) ?: throw IllegalStateException("Unable to verify current note")
-                if (sha256(current) != expectedSha256) throw IllegalStateException("Note changed outside editor")
-            }
-
-            val backupName = ".markbook-${document.name}.bak"
-            backup = DocumentsContract.renameDocument(resolver, document.uri, backupName)
-            val committed = DocumentsContract.renameDocument(resolver, temp, document.name)
-            if (committed == null) throw IllegalStateException("Unable to commit note")
-            if (backup != null) {
-                try {
-                    DocumentsContract.deleteDocument(resolver, backup)
-                } catch (_: Exception) {
-                    // The committed note is valid; the next launch can clean the backup.
-                }
-            }
-            true
-        } catch (_: Exception) {
+    private fun saveTextInternal(document: VaultDocument, content: String, expectedSha256: String?): Boolean =
+        VaultSaveLock.withLock {
+            val parent = document.parentUri ?: return@withLock false
+            val tempName = ".markbook-${UUID.randomUUID()}.tmp"
+            val temp = DocumentsContract.createDocument(resolver, parent, "text/plain", tempName)
+                ?: return@withLock false
+            var backup: Uri? = null
             try {
-                if (backup != null) DocumentsContract.renameDocument(resolver, backup, document.name)
-                DocumentsContract.deleteDocument(resolver, temp)
+                resolver.openOutputStream(temp, "wt")?.use { output ->
+                    output.write(content.toByteArray(StandardCharsets.UTF_8))
+                    output.flush()
+                } ?: throw IllegalStateException("Unable to open temporary note")
+
+                if (expectedSha256 != null) {
+                    val current = readText(document) ?: throw IllegalStateException("Unable to verify current note")
+                    if (sha256(current) != expectedSha256) throw IllegalStateException("Note changed outside editor")
+                }
+
+                val backupName = ".markbook-${document.name}.bak"
+                backup = DocumentsContract.renameDocument(resolver, document.uri, backupName)
+                val committed = DocumentsContract.renameDocument(resolver, temp, document.name)
+                if (committed == null) throw IllegalStateException("Unable to commit note")
+                if (backup != null) {
+                    try {
+                        DocumentsContract.deleteDocument(resolver, backup)
+                    } catch (_: Exception) {
+                        // The committed note is valid; the next launch can clean the backup.
+                    }
+                }
+                true
             } catch (_: Exception) {
-                // Recovery is retried on the next launch when the tree is available.
+                try {
+                    if (backup != null) DocumentsContract.renameDocument(resolver, backup, document.name)
+                    DocumentsContract.deleteDocument(resolver, temp)
+                } catch (_: Exception) {
+                    // Recovery is retried on the next launch when the tree is available.
+                }
+                false
             }
-            false
         }
-    }
 
     fun saveText(uri: Uri, name: String, content: String, parentUri: Uri): Boolean =
         saveText(VaultDocument(uri, name, "text/markdown", parentUri), content)
@@ -1088,6 +1092,21 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
             VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
         }
     }
+
+    override fun moveSyncFileToTrashIfUnchanged(file: VaultSyncFile, expectedSha256: String): VaultMutationResult =
+        VaultSaveLock.withLock {
+            val stream = openSyncInput(file)
+                ?: return@withLock VaultMutationResult.Failure(VaultMutationFailureKind.READ_FAILED, "Unable to read file for trash verification")
+            val currentDigest = try {
+                stream.use(VaultStreamUtils::computeDigest)
+            } catch (_: Exception) {
+                return@withLock VaultMutationResult.Failure(VaultMutationFailureKind.READ_FAILED, "Failed to compute digest")
+            }
+            if (!currentDigest.sha256.equals(expectedSha256, ignoreCase = true)) {
+                return@withLock VaultMutationResult.Failure(VaultMutationFailureKind.PRECONDITION_FAILED, "File was modified locally")
+            }
+            moveSyncFileToTrash(file)
+        }
 
 
     /**
@@ -2128,31 +2147,242 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         }.getOrNull()
     }
 
+    private fun trashCopyMarkerDirectory(tree: Uri): Uri? =
+        findOrCreateDirectory(tree, listOf(".markbook", "trash-moves"))
+
+    private fun createTrashCopyMarker(tree: Uri, transaction: TrashCopyTransaction): VaultDocument? {
+        val dir = trashCopyMarkerDirectory(tree) ?: return null
+        val name = ".markbook-trash-copy-${transaction.id}.txn"
+        val uri = DocumentsContract.createDocument(resolver, dir, "text/plain", name) ?: return null
+        val marker = resolveMutationDocument(dir, ".markbook/trash-moves", uri) ?: return null
+        return if (writeTrashCopyMarker(marker, transaction)) marker else null
+    }
+
+    private fun writeTrashCopyMarker(marker: VaultDocument, transaction: TrashCopyTransaction): Boolean = try {
+        resolver.openOutputStream(marker.uri, "wt")?.use { output ->
+            output.write(transaction.serialize().toByteArray(StandardCharsets.UTF_8))
+            output.flush()
+        } != null
+    } catch (_: Exception) { false }
+
+    private fun listPendingTrashMarkerTargetNames(tree: Uri): List<String> {
+        return try {
+            val dir = findChild(tree, rootDocument(tree), ".markbook")?.let { markbook ->
+                findChild(tree, markbook.uri, "trash-moves", ".markbook")
+            } ?: return emptyList()
+            listChildren(tree, dir.uri, ".markbook/trash-moves").mapNotNull { marker ->
+                readText(marker)?.let(TrashCopyTransaction::parse)?.targetTrashName
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun inspectSourceState(
+        tree: Uri,
+        sourcePath: String,
+        expectedSize: Long,
+        expectedSha256: String
+    ): SourceState {
+        val doc = try {
+            findByRelativePathStrict(tree, sourcePath)
+        } catch (_: Exception) {
+            return SourceState.UNKNOWN
+        }
+        if (doc == null) {
+            return SourceState.CONFIRMED_DELETED
+        }
+        val digest = try {
+            resolver.openInputStream(doc.uri)?.use(VaultStreamUtils::computeDigest)
+        } catch (_: Exception) {
+            return SourceState.UNKNOWN
+        } ?: return SourceState.UNKNOWN
+
+        return if (VaultTrashCopyPolicy.isCopyVerified(expectedSize, expectedSha256, digest.size, digest.sha256)) {
+            SourceState.CONFIRMED_INTACT
+        } else {
+            SourceState.CONFIRMED_MODIFIED
+        }
+    }
+
+    private fun cleanTargetAndMarker(
+        tree: Uri,
+        trash: Uri?,
+        marker: VaultDocument,
+        txn: TrashCopyTransaction
+    ) {
+        if (trash == null) {
+            // Cannot strictly enumerate .trash: retain transaction for safety
+            return
+        }
+
+        // 1. Attempt deletion by targetUri if recorded
+        txn.targetUri?.let { uriStr ->
+            runCatching { Uri.parse(uriStr) }.getOrNull()?.let { uri ->
+                runCatching { DocumentsContract.deleteDocument(resolver, uri) }
+            }
+        }
+
+        // 2. Locate and delete target in .trash by unique targetTrashName
+        val found = try {
+            findChildStrict(tree, trash, txn.targetTrashName, ".trash")
+        } catch (_: Exception) {
+            // Strict query failed: retain transaction
+            return
+        }
+
+        if (found != null) {
+            runCatching { DocumentsContract.deleteDocument(resolver, found.uri) }
+        }
+
+        // 3. Strictly confirm that target has disappeared from .trash
+        val stillExists = try {
+            findChildStrict(tree, trash, txn.targetTrashName, ".trash") != null
+        } catch (_: Exception) {
+            // Re-enumeration failed: retain transaction
+            return
+        }
+
+        if (stillExists) {
+            // Target still present: retain transaction
+            return
+        }
+
+        // 4. Target is confirmed gone via strict enumeration: safe to clean up marker
+        runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+    }
+
     private fun moveNoteToTrashByCopy(tree: Uri, document: VaultDocument, trash: Uri): VaultMutationResult {
-        val sourceParent = document.parentUri ?: return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
-        val existing = listChildrenStrict(tree, trash, ".trash").map { it.name }
+        if (document.parentUri == null) return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
+        val sourceDigest = try {
+            resolver.openInputStream(document.uri)?.use(VaultStreamUtils::computeDigest)
+        } catch (_: Exception) { null } ?: return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "Unable to read source file")
+        val sourceSha256 = sourceDigest.sha256
+        val sourceSize = sourceDigest.size
+
+        val existingInTrash = listChildrenStrict(tree, trash, ".trash").map { it.name }
+        val pendingTargets = listPendingTrashMarkerTargetNames(tree)
+        val existing = existingInTrash + pendingTargets
         val fallbackName = VaultTrashPolicy.uniqueNoteName(
             document.name,
             existing,
             SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         )
+        val transactionId = UUID.randomUUID().toString()
+        val initialTxn = TrashCopyTransaction(
+            id = transactionId,
+            sourcePath = document.relativePath,
+            sourceUri = document.uri.toString(),
+            sourceSha256 = sourceSha256,
+            sourceSize = sourceSize,
+            targetTrashName = fallbackName,
+            targetUri = null,
+            stage = TrashCopyTransaction.Stage.PREPARED
+        )
+        val marker = createTrashCopyMarker(tree, initialTxn)
+            ?: return VaultMutationResult.Failure(VaultMutationFailureKind.CREATE_FAILED, "Unable to create trash transaction marker")
+
         val mimeType = document.mimeType ?: if (document.name.endsWith(".md", true)) "text/markdown" else "application/octet-stream"
         val copy = DocumentsContract.createDocument(resolver, trash, mimeType, fallbackName)
-            ?: return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
-        return try {
-            resolver.openInputStream(document.uri)?.use { input ->
-                resolver.openOutputStream(copy, "wt")?.use { output -> input.copyTo(output) }
-                    ?: throw IllegalStateException("Unable to write trash copy")
-            } ?: throw IllegalStateException("Unable to read note")
-            if (!DocumentsContract.deleteDocument(resolver, document.uri)) {
-                runCatching { DocumentsContract.deleteDocument(resolver, copy) }
-                return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
+        if (copy == null) {
+            cleanTargetAndMarker(tree, trash, marker, initialTxn)
+            return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "Unable to create trash copy")
+        }
+
+        // Advance marker to TARGET_CREATED immediately so recovery can clean up partial copies on crash
+        val createdTxn = initialTxn.copy(targetUri = copy.toString(), stage = TrashCopyTransaction.Stage.TARGET_CREATED)
+        if (!writeTrashCopyMarker(marker, createdTxn)) {
+            cleanTargetAndMarker(tree, trash, marker, createdTxn)
+            return VaultMutationResult.Failure(VaultMutationFailureKind.CREATE_FAILED, "Unable to persist TARGET_CREATED stage")
+        }
+
+        var isCopiedVerified = false
+        try {
+            val copyDigest = resolver.openInputStream(document.uri)?.use { inStream ->
+                resolver.openOutputStream(copy, "wt")?.use { outStream ->
+                    VaultStreamUtils.copyAndDigest(inStream, outStream)
+                } ?: throw IllegalStateException("Unable to write trash copy")
+            } ?: throw IllegalStateException("Unable to read source note")
+
+            if (!VaultTrashCopyPolicy.isCopyVerified(sourceSize, sourceSha256, copyDigest.size, copyDigest.sha256)) {
+                throw IllegalStateException("Trash copy stream verification failed: size or digest mismatch")
             }
-            val resolved = resolveMutationDocument(trash, ".trash", copy)
-            VaultMutationResult.Success(resolved, document.name, resolved?.name)
+
+            // Re-read and verify copy integrity
+            val readBackDigest = resolver.openInputStream(copy)?.use(VaultStreamUtils::computeDigest)
+                ?: throw IllegalStateException("Unable to read back trash copy")
+            if (!VaultTrashCopyPolicy.isCopyVerified(sourceSize, sourceSha256, readBackDigest.size, readBackDigest.sha256)) {
+                throw IllegalStateException("Trash copy verification failed: size or digest mismatch")
+            }
+
+            // Advance marker to COPIED_VERIFIED
+            val verifiedTxn = createdTxn.copy(stage = TrashCopyTransaction.Stage.COPIED_VERIFIED)
+            if (!writeTrashCopyMarker(marker, verifiedTxn)) {
+                throw IllegalStateException("Unable to persist COPIED_VERIFIED stage")
+            }
+            isCopiedVerified = true
+
+            // Re-verify source right before deleting source
+            val preDeleteState = inspectSourceState(tree, document.relativePath, sourceSize, sourceSha256)
+            when (preDeleteState) {
+                SourceState.CONFIRMED_MODIFIED -> {
+                    cleanTargetAndMarker(tree, trash, marker, verifiedTxn)
+                    return VaultMutationResult.Failure(VaultMutationFailureKind.PRECONDITION_FAILED, "Source note changed during copy to trash")
+                }
+                SourceState.CONFIRMED_INTACT -> {
+                    // Safe to proceed to delete source
+                }
+                SourceState.CONFIRMED_DELETED,
+                SourceState.UNKNOWN -> {
+                    return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "Unable to verify source before deletion; preserved copy and marker")
+                }
+            }
+
+            // Attempt to delete source
+            runCatching { DocumentsContract.deleteDocument(resolver, document.uri) }
+
+            // Confirm source deletion outcome
+            val postDeleteState = inspectSourceState(tree, document.relativePath, sourceSize, sourceSha256)
+            when (postDeleteState) {
+                SourceState.CONFIRMED_DELETED -> {
+                    runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+                    val resolved = resolveMutationDocument(trash, ".trash", copy)
+                    return VaultMutationResult.Success(resolved, document.name, resolved?.name)
+                }
+                SourceState.CONFIRMED_INTACT -> {
+                    cleanTargetAndMarker(tree, trash, marker, verifiedTxn)
+                    return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "Unable to delete source after copy")
+                }
+                SourceState.CONFIRMED_MODIFIED -> {
+                    cleanTargetAndMarker(tree, trash, marker, verifiedTxn)
+                    return VaultMutationResult.Failure(VaultMutationFailureKind.PRECONDITION_FAILED, "Source note changed after deletion attempt")
+                }
+                SourceState.UNKNOWN -> {
+                    return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "Source deletion result uncertain; preserved trash copy and recovery marker")
+                }
+            }
         } catch (_: Exception) {
-            runCatching { DocumentsContract.deleteDocument(resolver, copy) }
-            VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
+            if (!isCopiedVerified) {
+                cleanTargetAndMarker(tree, trash, marker, createdTxn)
+                return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
+            } else {
+                val stateOnException = inspectSourceState(tree, document.relativePath, sourceSize, sourceSha256)
+                when (stateOnException) {
+                    SourceState.CONFIRMED_DELETED -> {
+                        runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+                        val resolved = resolveMutationDocument(trash, ".trash", copy)
+                        return VaultMutationResult.Success(resolved, document.name, resolved?.name)
+                    }
+                    SourceState.CONFIRMED_INTACT -> {
+                        cleanTargetAndMarker(tree, trash, marker, createdTxn)
+                        return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED)
+                    }
+                    SourceState.CONFIRMED_MODIFIED,
+                    SourceState.UNKNOWN -> {
+                        return VaultMutationResult.Failure(VaultMutationFailureKind.MOVE_UNSUPPORTED, "Source deletion exception; preserved trash copy and marker")
+                    }
+                }
+            }
         }
     }
 
@@ -2409,6 +2639,73 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
             } else {
                 payload.let(InlineAttachmentDeleteTransaction::parse)?.let {
                     finishInlineAttachmentDelete(marker, it, recovery = true)
+                }
+            }
+        }
+    }
+
+    private fun recoverTrashCopyMoves(tree: Uri) {
+        val dir = findChild(tree, rootDocument(tree), ".markbook")?.let { markbook ->
+            findChild(tree, markbook.uri, "trash-moves", ".markbook")
+        } ?: return
+        val markers = try { listChildrenStrict(tree, dir.uri, ".markbook/trash-moves") } catch (_: Exception) { return }
+        val trash = try {
+            findChildStrict(tree, rootDocument(tree), ".trash")?.uri
+                ?: findOrCreateDirectory(tree, listOf(".trash"))
+        } catch (_: Exception) { null }
+        markers.forEach { marker ->
+            val payload = readText(marker) ?: return@forEach
+            val txn = TrashCopyTransaction.parse(payload) ?: run {
+                runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+                return@forEach
+            }
+            when (txn.stage) {
+                TrashCopyTransaction.Stage.PREPARED,
+                TrashCopyTransaction.Stage.TARGET_CREATED -> {
+                    cleanTargetAndMarker(tree, trash, marker, txn)
+                }
+                TrashCopyTransaction.Stage.COPIED_VERIFIED -> {
+                    var targetUri = txn.targetUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                    if (targetUri == null && trash != null) {
+                        targetUri = try {
+                            findChildStrict(tree, trash, txn.targetTrashName, ".trash")?.uri
+                        } catch (_: Exception) { null }
+                    }
+                    val targetVerified = if (targetUri != null) {
+                        try {
+                            resolver.openInputStream(targetUri)?.use(VaultStreamUtils::computeDigest)?.let { targetDigest ->
+                                VaultTrashCopyPolicy.isCopyVerified(txn.sourceSize, txn.sourceSha256, targetDigest.size, targetDigest.sha256)
+                            } ?: false
+                        } catch (_: Exception) { false }
+                    } else false
+
+                    val sourceState = inspectSourceState(tree, txn.sourcePath, txn.sourceSize, txn.sourceSha256)
+
+                    when (VaultTrashRecoveryPolicy.decide(txn.stage, targetVerified, sourceState)) {
+                        TrashRecoveryAction.DELETE_TARGET_AND_MARKER -> {
+                            cleanTargetAndMarker(tree, trash, marker, txn)
+                        }
+                        TrashRecoveryAction.FINALIZE_SOURCE_DELETE -> {
+                            val sourceDoc = try { findByRelativePathStrict(tree, txn.sourcePath) } catch (_: Exception) { null }
+                            val uriToDelete = sourceDoc?.uri ?: runCatching { Uri.parse(txn.sourceUri) }.getOrNull()
+                            if (uriToDelete != null) {
+                                runCatching { DocumentsContract.deleteDocument(resolver, uriToDelete) }
+                            }
+                            val stateAfterFinalize = inspectSourceState(tree, txn.sourcePath, txn.sourceSize, txn.sourceSha256)
+                            if (stateAfterFinalize == SourceState.CONFIRMED_DELETED) {
+                                runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+                            }
+                        }
+                        TrashRecoveryAction.DELETE_MARKER_ONLY -> {
+                            runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
+                        }
+                        TrashRecoveryAction.RETAIN_TRANSACTION -> {
+                            // Retain copy and marker for data safety
+                        }
+                    }
+                }
+                TrashCopyTransaction.Stage.SOURCE_DELETED -> {
+                    runCatching { DocumentsContract.deleteDocument(resolver, marker.uri) }
                 }
             }
         }

@@ -331,7 +331,9 @@ object AppNoteSaveCoordinator : Executor {
                     dispatchToMain { onComplete(false, null) }
                     return@execute
                 }
-                val success = writeOverride?.invoke() ?: repository.saveText(note, content)
+                val success = VaultSaveLock.withLock {
+                    writeOverride?.invoke() ?: repository.saveText(note, content)
+                }
                 if (pending != null) synchronized(pending) {
                     if (pending.state == PendingNoteSaveState.CLEARED) {
                         dispatchToMain { onComplete(false, null) }

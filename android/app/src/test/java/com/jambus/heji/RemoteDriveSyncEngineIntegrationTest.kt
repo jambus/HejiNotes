@@ -49,7 +49,10 @@ class RemoteDriveSyncEngineIntegrationTest {
             }
         }
 
+        var onBeforeOpenSyncInput: ((String) -> Unit)? = null
+
         override fun openSyncInput(file: VaultSyncFile): InputStream? {
+            onBeforeOpenSyncInput?.invoke(file.relativePath)
             val bytes = files[file.relativePath] ?: return null
             return ByteArrayInputStream(bytes)
         }
@@ -58,6 +61,19 @@ class RemoteDriveSyncEngineIntegrationTest {
             files.remove(file.relativePath)
             trashedFiles += file.relativePath
             return VaultMutationResult.Success(file.document, file.document.name, file.document.name)
+        }
+
+        var onBeforeTrashIfUnchanged: ((String) -> Unit)? = null
+
+        override fun moveSyncFileToTrashIfUnchanged(file: VaultSyncFile, expectedSha256: String): VaultMutationResult {
+            onBeforeTrashIfUnchanged?.invoke(file.relativePath)
+            val bytes = files[file.relativePath]
+                ?: return VaultMutationResult.Failure(VaultMutationFailureKind.READ_FAILED)
+            val currentSha256 = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+            if (!currentSha256.equals(expectedSha256, ignoreCase = true)) {
+                return VaultMutationResult.Failure(VaultMutationFailureKind.PRECONDITION_FAILED)
+            }
+            return moveSyncFileToTrash(file)
         }
 
         override fun syncMd5(relativePath: String): String? {
@@ -84,6 +100,7 @@ class RemoteDriveSyncEngineIntegrationTest {
     ) : DriveGateway {
         val items = mutableMapOf<String, FakeItem>()
         val trashedIds = mutableListOf<String>()
+        val trashedEtags = mutableMapOf<String, String?>()
         val copiedCalls = mutableListOf<Triple<String, String, String>>()
         val eventOrder = mutableListOf<String>()
         var throwOnScan: Exception? = null
@@ -168,6 +185,7 @@ class RemoteDriveSyncEngineIntegrationTest {
             val item = items[id] ?: throw DriveApiException("Not found")
             item.trashed = true
             trashedIds += id
+            trashedEtags[id] = expectedEtag
             eventOrder += "trash:$id"
         }
 
@@ -175,7 +193,10 @@ class RemoteDriveSyncEngineIntegrationTest {
             return (items[id] ?: throw DriveApiException("Not found")).toDriveItem()
         }
 
+        var onRevision: ((String) -> Unit)? = null
+
         override fun revision(id: String): DriveRevision {
+            onRevision?.invoke(id)
             val item = items[id] ?: throw DriveApiException("Not found")
             return DriveRevision(item.toDriveItem(), "etag-$id")
         }
@@ -480,5 +501,145 @@ class RemoteDriveSyncEngineIntegrationTest {
         } catch (ex: OneDriveReloginRequired) {
             assertEquals("Microsoft sign-in interaction is required", ex.message)
         }
+    }
+
+    @Test
+    fun `local file edited after sync scan is preserved and uploaded instead of moved to trash`() {
+        val vaultAccessor = FakeSyncVaultAccessor()
+        vaultAccessor.setFile("doc.md", "original-content")
+
+        val gateway = FakeDriveGateway()
+        val root = DriveVaultRoot("root-1", "Remote Vault")
+
+        val baselineStore = FakeDriveBaselineStore()
+        baselineStore.currentBaseline = DriveSyncBaseline(
+            vaultId = "vault-1",
+            rootId = "root-1",
+            accountId = "acc-1",
+            files = mapOf(
+                "doc.md" to DriveBaselineFile(
+                    path = "doc.md",
+                    localSha256 = sha256("original-content"),
+                    remoteId = "item-doc",
+                    remoteMd5 = md5("original-content"),
+                    remoteVersion = null,
+                    remoteRevision = "rev-1",
+                    localMd5 = md5("original-content")
+                )
+            ),
+            completedAt = 1000L
+        )
+
+        vaultAccessor.onBeforeTrashIfUnchanged = { path ->
+            if (path == "doc.md") {
+                vaultAccessor.setFile("doc.md", "newly-edited-content")
+            }
+        }
+
+        val engine = RemoteDriveSyncEngine(
+            repository = vaultAccessor,
+            api = gateway,
+            vaultId = "vault-1",
+            accountId = "acc-1",
+            baselineStore = baselineStore
+        )
+
+        val result = engine.sync(root)
+        assertTrue("Sync should succeed: ${result.errors}", result.isSuccessful)
+        assertFalse("Locally modified file must not be moved to trash", vaultAccessor.trashedFiles.contains("doc.md"))
+        assertTrue("Locally modified file must be uploaded", gateway.eventOrder.contains("upload:doc.md"))
+        assertEquals(1, result.uploaded)
+        assertEquals(0, result.deleted)
+        val uploadedItem = gateway.items.values.firstOrNull { it.name == "doc.md" }
+        assertNotNull(uploadedItem)
+        assertEquals("newly-edited-content", String(uploadedItem!!.content, StandardCharsets.UTF_8))
+    }
+
+    @Test
+    fun `remote deletion reconciliation uses revision etag for trash concurrency`() {
+        val vaultAccessor = FakeSyncVaultAccessor()
+
+        val gateway = FakeDriveGateway()
+        val root = DriveVaultRoot("root-1", "Remote Vault")
+        gateway.addItem("item-doc", "root-1", "doc.md", "content", revision = "rev-1")
+
+        val baselineStore = FakeDriveBaselineStore()
+        baselineStore.currentBaseline = DriveSyncBaseline(
+            vaultId = "vault-1",
+            rootId = "root-1",
+            accountId = "acc-1",
+            files = mapOf(
+                "doc.md" to DriveBaselineFile(
+                    path = "doc.md",
+                    localSha256 = sha256("content"),
+                    remoteId = "item-doc",
+                    remoteMd5 = md5("content"),
+                    remoteVersion = null,
+                    remoteRevision = "rev-1",
+                    localMd5 = md5("content")
+                )
+            ),
+            completedAt = 1000L
+        )
+
+        val engine = RemoteDriveSyncEngine(
+            repository = vaultAccessor,
+            api = gateway,
+            vaultId = "vault-1",
+            accountId = "acc-1",
+            baselineStore = baselineStore
+        )
+
+        val result = engine.sync(root)
+        assertTrue("Sync should succeed: ${result.errors}", result.isSuccessful)
+        assertEquals(1, result.deleted)
+        assertTrue("Remote item must be trashed", gateway.trashedIds.contains("item-doc"))
+        assertEquals("etag-item-doc", gateway.trashedEtags["item-doc"])
+    }
+
+    @Test
+    fun `remote deletion fails if remote file changed during sync`() {
+        val vaultAccessor = FakeSyncVaultAccessor()
+        val gateway = FakeDriveGateway()
+        val root = DriveVaultRoot("root-1", "Remote Vault")
+        val item = gateway.addItem("item-doc", "root-1", "doc.md", "content", revision = "rev-1")
+
+        val baselineStore = FakeDriveBaselineStore()
+        baselineStore.currentBaseline = DriveSyncBaseline(
+            vaultId = "vault-1",
+            rootId = "root-1",
+            accountId = "acc-1",
+            files = mapOf(
+                "doc.md" to DriveBaselineFile(
+                    path = "doc.md",
+                    localSha256 = sha256("content"),
+                    remoteId = "item-doc",
+                    remoteMd5 = md5("content"),
+                    remoteVersion = null,
+                    remoteRevision = "rev-1",
+                    localMd5 = md5("content")
+                )
+            ),
+            completedAt = 1000L
+        )
+
+        // Simulate concurrent remote modification right before engine fetches revision to trash
+        gateway.onRevision = { id ->
+            if (id == "item-doc") {
+                gateway.items["item-doc"] = item.copy(revision = "rev-2-concurrent")
+            }
+        }
+
+        val engine = RemoteDriveSyncEngine(
+            repository = vaultAccessor,
+            api = gateway,
+            vaultId = "vault-1",
+            accountId = "acc-1",
+            baselineStore = baselineStore
+        )
+
+        val result = engine.sync(root)
+        assertFalse("Sync should fail due to concurrent remote modification", result.isSuccessful)
+        assertFalse("Remote item must not be trashed when revision changed", gateway.trashedIds.contains("item-doc"))
     }
 }

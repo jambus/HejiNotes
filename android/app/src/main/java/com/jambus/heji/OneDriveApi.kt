@@ -156,6 +156,8 @@ internal object OneDriveUrlPolicy {
         return value
     }
 
+    fun sanitizeUrl(url: URL): String = url.host.orEmpty()
+
     private fun isDomainOrSubdomain(host: String, domain: String): Boolean =
         host == domain || host.endsWith(".$domain")
 }
@@ -441,7 +443,7 @@ class OneDriveApi(
             instanceFollowRedirects = false
         }
 
-    private fun sanitizeUrl(url: URL): String = "${url.protocol}://${url.host}${url.path}"
+    private fun sanitizeUrl(url: URL): String = OneDriveUrlPolicy.sanitizeUrl(url)
 
     private fun requireSuccess(connection: HttpURLConnection, expected: Set<Int>, authenticatedGraph: Boolean = true) {
         val code = connection.responseCode

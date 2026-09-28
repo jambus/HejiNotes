@@ -2553,11 +2553,17 @@ class MainActivity : Activity() {
 
     private fun confirmMoveToTrash(document: VaultDocument) {
         val label = if (repository.isDirectory(document)) "文件夹“${document.name}”" else "笔记“${document.name.removeSuffix(".md")}”"
+        val message = if (UiLanguage.locale(this).language == "zh") {
+            "$label 将整体移入 Vault/.trash，下次同步时远端对应文件也将移入云端回收站。Markdown 链接不会更新，图片附件不会自动删除。"
+        } else {
+            val enLabel = if (repository.isDirectory(document)) "Folder \"${document.name}\"" else "Note \"${document.name.removeSuffix(".md")}\""
+            "$enLabel will be moved to Vault/.trash, and will be moved to cloud Trash on next sync. Markdown links will not be updated, and image attachments will not be deleted automatically."
+        }
         dialogBuilder()
-            .setTitle("移到回收站？")
-            .setMessage("$label 将整体移入 Vault/.trash，不会同步到 Google Drive。Markdown 链接不会更新，图片附件不会自动删除。")
-            .setNegativeButton("取消", null)
-            .setPositiveButton("移到回收站") { _, _ ->
+            .setTitle(ui("移到回收站？"))
+            .setMessage(message)
+            .setNegativeButton(ui("取消"), null)
+            .setPositiveButton(ui("移到回收站")) { _, _ ->
                 val generation = browserLoadGeneration
                 browserMutationPending = true
                 val progress = dialogBuilder()
@@ -2629,6 +2635,7 @@ class MainActivity : Activity() {
         VaultMutationFailureKind.RENAME_FAILED -> "无法重命名，请检查 Vault 权限"
         VaultMutationFailureKind.TRASH_NAME_CONFLICT -> "回收站已有同名项目"
         VaultMutationFailureKind.MOVE_UNSUPPORTED -> "无法移到回收站：当前 Provider 不支持整体移动，原文件未改动"
+        VaultMutationFailureKind.PRECONDITION_FAILED -> "操作前文件内容发生变化，已保留原文件"
     }
 
     private fun showEditor(note: VaultDocument, content: String) {
