@@ -2,6 +2,9 @@
 
 ## 工程基线
 
+- [x] 修复 Google Drive / OneDrive 启动后按钮状态滞后；新增 5 项确认状态/订阅测试，0.6.1（13）完整 281 项测试与 APK 构建通过。
+- [ ] 同步状态修复的独立测试/最终复核（代理额度受限）；Mate 验证重复点击、完成/失败、前后台、旋转与编辑不受干扰。
+
 - [x] T501 创建 `android/` Kotlin/Gradle 工程与 Gradle Wrapper。
 - [x] T502 配置 application ID、arm64 构建、debug 签名和版本信息。
 - [x] T503 使用 Gradle Wrapper 生成 debug APK。

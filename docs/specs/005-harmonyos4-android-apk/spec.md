@@ -4,14 +4,17 @@
 **Priority**: P1
 **Depends on**: 001-local-markdown-notebook, 002-camera-attachments,
 004-harmony-4-5-compatibility
-**Current Baseline**: Android APK `0.6.0` development (`versionCode 12`)
+**Current Baseline**: Android APK `0.6.1` development (`versionCode 13`)
 
 ## Goal
+
+同步状态修复：Google Drive / OneDrive 确认启动后立即显示准备状态，后台开始、取消、完成或失败时
+自动刷新当前同步页面；离开页面继续编辑不受影响，返回前台恢复真实状态。
 
 为运行 HarmonyOS 4 的 Mate 60 提供可直接安装的 Android APK，优先完成本地
 Obsidian Vault 编辑和拍照记录闭环。
 
-当前 Android 开发基线为 `0.6.0`；历史版本范围、验证状态和后续版本管理规则见
+当前 Android 开发基线为 `0.6.1`；历史版本范围、验证状态和后续版本管理规则见
 [`docs/RELEASE_NOTES.md`](../../RELEASE_NOTES.md)。完成 FR-501、FR-507、FR-508 对应的
 Mate 60 真机验收前，该版本不得标记为候选或正式发布。
 

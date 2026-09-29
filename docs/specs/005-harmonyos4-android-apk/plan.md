@@ -2,8 +2,11 @@
 
 ## Technical Context
 
+- 同步页面通过生命周期内的设备本地任务状态订阅刷新；启动请求等待服务受理期间显示准备反馈，
+  服务状态为真实运行结果的唯一来源。不修改同步引擎、Vault 契约或持久任务格式。
+
 - Kotlin Android 工程位于 `android/`，使用项目内 Gradle Wrapper。
-- 当前开发版本为 `versionName 0.5.2`、`versionCode 11`；该版本为未发布开发基线，后续候选版本按
+- 当前开发版本为 `versionName 0.6.1`、`versionCode 13`；该版本为未发布开发基线，后续候选版本按
   [`docs/RELEASE_NOTES.md`](../../RELEASE_NOTES.md) 的规则提升并记录。
 - 通过 Storage Access Framework 选择 Vault 并持久化目录 URI 权限。
 - 通过 Activity Result API 拉起系统相机并复制返回内容。

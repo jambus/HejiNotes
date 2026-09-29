@@ -364,6 +364,62 @@ class MainActivity : Activity() {
         }
     }
 
+    private var stopObservingSync: (() -> Unit)? = null
+    private var syncConfirmationBaseline: SyncTaskSnapshot? = null
+    private val refreshSyncUi = Runnable {
+        if (stopObservingSync != null && !isFinishing && !isDestroyed) refreshVisibleSyncPage()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        stopObservingSync = SyncTaskStateStore(this).observe {
+            handler.removeCallbacks(refreshSyncUi)
+            handler.post(refreshSyncUi)
+        }
+        handler.post(refreshSyncUi)
+    }
+
+    override fun onStop() {
+        stopObservingSync?.invoke()
+        stopObservingSync = null
+        handler.removeCallbacks(refreshSyncUi)
+        super.onStop()
+    }
+
+    private fun refreshVisibleSyncPage() {
+        val scroll = findSyncScrollView(window.decorView)
+        val scrollY = scroll?.scrollY ?: 0
+        when (screen) {
+            Screen.SETTINGS -> showSettings()
+            Screen.DRIVE_SETUP -> showDriveSetup()
+            Screen.ONEDRIVE_SETUP -> showOneDriveSetup()
+            Screen.DRIVE_DETAILS -> showSyncDetails()
+            Screen.DRIVE_CONFIRM -> if (SyncConfirmationPolicy.shouldShowResult(syncConfirmationBaseline, currentSyncSnapshot())) showDriveSetup() else return
+            Screen.ONEDRIVE_CONFIRM -> if (SyncConfirmationPolicy.shouldShowResult(syncConfirmationBaseline, currentSyncSnapshot())) showOneDriveSetup() else return
+            else -> return // Never rebuild an editor or a folder picker for sync updates.
+        }
+        findSyncScrollView(window.decorView)?.let { updated -> updated.post { updated.scrollTo(0, scrollY) } }
+    }
+
+    private fun findSyncScrollView(view: View): ScrollView? {
+        if (view is ScrollView) return view
+        if (view is android.view.ViewGroup) {
+            for (index in 0 until view.childCount) {
+                findSyncScrollView(view.getChildAt(index))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun syncStartAction(start: () -> Unit): View = action(ui("开始同步"), true) {}.apply {
+        setOnClickListener {
+            // The Service receives its Intent later; keep this action disabled until its state arrives.
+            isEnabled = false
+            text = getString(R.string.sync_preparing)
+            start()
+        }
+    }
+
     override fun onPause() {
         super.onPause()
         if (screen == Screen.EDITOR && webView != null) saveCurrentNote()
@@ -1280,7 +1336,7 @@ class MainActivity : Activity() {
                     setPadding(dp(6), dp(2), dp(6), dp(14))
                 }, matchWrap())
                 if (syncSnapshot?.isRunning == true) {
-                    content.addView(action("查看后台同步详情", true) { showSyncDetails() }, matchWrap())
+                    content.addView(action(getString(R.string.sync_running), true) { showSyncDetails() }, matchWrap())
                 } else {
                     content.addView(action("比较并同步", true) { showDriveSyncConfirmation(selectedRoot) }, matchWrap())
                 }
@@ -1494,6 +1550,7 @@ class MainActivity : Activity() {
         name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
 
     private fun showDriveSyncConfirmation(rootSelection: DriveVaultRoot) {
+        syncConfirmationBaseline = currentSyncSnapshot()
         screen = Screen.DRIVE_CONFIRM
         val root = pageRoot(COLOR_BACKGROUND)
         root.addView(simpleToolbar("‹  Google Drive", "确认同步") { showDriveSetup() }, matchWrap())
@@ -1513,13 +1570,14 @@ class MainActivity : Activity() {
             setTextColor(COLOR_SECONDARY_TEXT)
             setPadding(0, dp(12), 0, dp(22))
         }, matchWrap())
-        content.addView(action("开始同步", true) { startDriveSync(rootSelection) }, matchWrap())
+        content.addView(syncStartAction { startDriveSync(rootSelection) }, matchWrap())
         content.addView(action("取消", false) { showDriveSetup() }, matchWrap().apply { topMargin = dp(8) })
         root.addView(content, matchWrap())
         setContentView(root)
     }
 
     private fun startDriveSync(rootSelection: DriveVaultRoot) {
+        if (currentSyncSnapshot()?.isRunning == true) { showSyncDetails(); return }
         val account = driveAuth.currentAccount()
         if (!driveAuth.isAuthorized(account) || account == null) {
             showDriveSetup(getString(R.string.drive_account_relogin_required))
@@ -1535,8 +1593,11 @@ class MainActivity : Activity() {
             showDriveSetup(getString(R.string.drive_sync_tuple_changed))
             return
         }
-        BackgroundSyncService.startGoogleDrive(this, rootSelection, vaultUri, account.email.orEmpty())
-        showDriveSetup("同步已在后台开始。你可以继续编辑本地文件；完成或失败时会通知你。")
+        try {
+            BackgroundSyncService.startGoogleDrive(this, rootSelection, vaultUri, account.email.orEmpty())
+        } catch (_: Exception) {
+            showDriveSetup(getString(R.string.drive_sync_connection_failed))
+        }
     }
 
     private fun showOneDriveSetup(message: String? = null) {
@@ -1626,9 +1687,14 @@ class MainActivity : Activity() {
                 })
                 val syncSnapshot = currentSyncSnapshot()
                 if (syncSnapshot?.isRunning == true) {
-                    content.addView(action(ui("同步详情"), true) { showSyncDetails() }, matchWrap())
+                    content.addView(action(getString(R.string.sync_running), true) { showSyncDetails() }, matchWrap())
                 } else {
                     content.addView(action(ui("开始同步"), true) { showOneDriveSyncConfirmation(selectedRoot) }, matchWrap())
+                }
+                syncSnapshot?.let { snapshot ->
+                    content.addView(settingsRow(ui("同步详情"), snapshot.statusLabel(this), false) { showSyncDetails() }, matchWrap().apply {
+                        topMargin = dp(8)
+                    })
                 }
                 content.addView(action(getString(R.string.onedrive_change_vault), false) { showOneDriveFolderPicker(true) }, matchWrap().apply {
                     topMargin = dp(8)
@@ -1841,6 +1907,7 @@ class MainActivity : Activity() {
     }
 
     private fun showOneDriveSyncConfirmation(rootSelection: DriveVaultRoot) {
+        syncConfirmationBaseline = currentSyncSnapshot()
         screen = Screen.ONEDRIVE_CONFIRM
         val root = pageRoot(COLOR_BACKGROUND)
         root.addView(simpleToolbar("‹  OneDrive", ui("确认同步")) { showOneDriveSetup() }, matchWrap())
@@ -1854,13 +1921,14 @@ class MainActivity : Activity() {
             setTextColor(COLOR_SECONDARY_TEXT)
             setPadding(0, dp(12), 0, dp(22))
         }, matchWrap())
-        content.addView(action(ui("开始同步"), true) { startOneDriveSync(rootSelection) }, matchWrap())
+        content.addView(syncStartAction { startOneDriveSync(rootSelection) }, matchWrap())
         content.addView(action(ui("取消"), false) { showOneDriveSetup() }, matchWrap().apply { topMargin = dp(8) })
         root.addView(content, matchWrap())
         setContentView(root)
     }
 
     private fun startOneDriveSync(rootSelection: DriveVaultRoot) {
+        if (currentSyncSnapshot()?.isRunning == true) { showSyncDetails(); return }
         val account = oneDriveAccount ?: run {
             showOneDriveSetup(getString(R.string.onedrive_account_relogin_required)); return
         }
@@ -1872,8 +1940,11 @@ class MainActivity : Activity() {
             showOneDriveSetup(getString(R.string.onedrive_sync_tuple_changed))
             return
         }
-        BackgroundSyncService.startOneDrive(this, rootSelection, vaultUri, account.id)
-        showOneDriveSetup(getString(R.string.onedrive_sync_started))
+        try {
+            BackgroundSyncService.startOneDrive(this, rootSelection, vaultUri, account.id)
+        } catch (_: Exception) {
+            showOneDriveSetup(getString(R.string.onedrive_sync_connection_failed))
+        }
     }
 
     private fun showSyncDetails() {

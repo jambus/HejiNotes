@@ -15,6 +15,19 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
   构建记录后，才能标记为“已发布”。
 - 尚未完成的优化不写入“已实现功能”，统一关联到对应编号规格的未完成任务。
 
+## 0.6.1 — Android 同步页面状态修复
+
+**状态**：开发基线，待 Mate 真机验收（非候选，未发布）
+**Android 安装包版本**：`versionName = 0.6.1`，`versionCode = 13`
+
+- Google Drive / OneDrive 点击确认后立即禁用启动按钮并显示准备状态；服务受理后自动刷新同步入口。
+- 设置、Provider 页面和同步详情订阅任务状态；前台恢复时重新读取，进度刷新保留滚动位置，不重建编辑器或文件夹选择器。
+- 保留服务拒绝、失败、取消和完成状态；启动异常返回可重试页面，不改动同步引擎或 Vault 契约。
+- 验证：2026-09-29 主代理执行 `:app:testDebugUnitTest :app:assembleDebug` 成功，281 项测试
+  全部通过（0 failure / error / skip），包含 5 项新增确认状态与订阅回归；本次重新编译并打包。
+  独立设计审查已完成，独立测试与最终复核因代理额度限制未完成；真实账号、前后台切换与编辑连续性待 Mate 验收。
+- Debug APK SHA-256：`936b8e5e5b22db2b08c63fecc917c4aa7b3a954856957789ebc8bf828e376e00`。
+
 ## 0.6.0 — Android OneDrive 同步
 
 **状态**：开发基线，待真实 OneDrive 与 Mate 60 验收（非候选）

@@ -13,8 +13,8 @@ android {
         applicationId = "com.jambus.heji"
         minSdk = 26
         targetSdk = 28
-        versionCode = 12
-        versionName = "0.6.0"
+        versionCode = 13
+        versionName = "0.6.1"
         val oneDriveClientId = (project.findProperty("HEJI_ONEDRIVE_CLIENT_ID") as String?)
             ?: System.getenv("HEJI_ONEDRIVE_CLIENT_ID")
             ?: ""

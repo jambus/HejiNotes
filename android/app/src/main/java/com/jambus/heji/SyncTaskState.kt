@@ -18,6 +18,12 @@ enum class SyncTaskStatus {
     RUNNING, SUCCEEDED, FAILED, CANCELLED, INTERRUPTED
 }
 
+/** A previous completed task must not dismiss a newly opened confirmation. */
+internal object SyncConfirmationPolicy {
+    fun shouldShowResult(before: SyncTaskSnapshot?, current: SyncTaskSnapshot?): Boolean =
+        current != null && (current.isRunning || current != before)
+}
+
 /** Stable, locale-neutral lifecycle markers stored in preferences instead of rendered text. */
 enum class SyncMessageCode { PREPARING, PROGRESS, CANCELLING, COMPLETED, PARTIAL_FAILURE, CANCELLED, INTERRUPTED }
 enum class SyncErrorCode { ITEM_FAILED, INTERRUPTED }
@@ -75,6 +81,15 @@ data class SyncTaskSnapshot(
 /** Persists only the latest task summary; credentials and Vault content are never stored here. */
 class SyncTaskStateStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+
+    /** Caller owns the returned subscription and must close it when its UI stops. */
+    fun observe(onChanged: () -> Unit): () -> Unit {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == SNAPSHOT_KEY) onChanged()
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        return { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
 
     @Synchronized
     fun snapshot(): SyncTaskSnapshot? = preferences.getString(SNAPSHOT_KEY, null)?.let(::decode)?.let { decoded ->
