@@ -537,6 +537,12 @@ object AppNoteSaveCoordinator : Executor {
         return activePhotoSessions.containsKey(captureFilePath)
     }
 
+    /** Destructive folder snapshots fail closed while any save/recovery or media write is live. */
+    fun isVaultMutationBarrierClear(): Boolean = pendingSavesById.isEmpty() && failedSnapshots.isEmpty() &&
+        activePhotoSessions.values.none { session -> synchronized(session) {
+            session.phase !in setOf(PhotoPhase.CANCELLED, PhotoPhase.COMMITTED, PhotoPhase.FAILED)
+        } }
+
     fun resetForTests() {
         noteRevisions.clear()
         pendingSavesById.values.forEach { it.deadline?.cancel(false); it.latch.countDown() }

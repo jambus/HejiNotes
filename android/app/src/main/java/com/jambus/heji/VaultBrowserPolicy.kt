@@ -27,6 +27,14 @@ object VaultBrowserPolicy {
     ): Boolean = !isDirectory && !isHidden(relativePath) && isReadOnlyAttachmentPath(relativePath) &&
         fileKind(name, mimeType) in setOf(FileKind.IMAGE, FileKind.VIDEO)
 
+    fun canPermanentlyDeleteAttachmentFolder(relativePath: String): Boolean {
+        val segments = relativePath.split('/').filter { it.isNotBlank() }
+        return segments.isNotEmpty() &&
+            segments.any { it in readOnlyAttachmentSegments } &&
+            !isHidden(relativePath) &&
+            segments.none { it.startsWith('.') || it.startsWith(".markbook-") }
+    }
+
     fun fileKind(name: String, mimeType: String?): FileKind {
         val mime = mimeType.orEmpty().lowercase(Locale.ROOT)
         val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)

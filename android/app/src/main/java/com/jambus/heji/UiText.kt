@@ -43,8 +43,8 @@ object UiText {
         "存储" to "Storage", "显示" to "Appearance", "语言" to "Language", "关于" to "About",
         "日间模式" to "Day mode", "夜间模式" to "Night mode", "浅色背景与深色文字" to "Light background and dark text",
         "深色工作区与深色编辑纸面" to "Dark workspace and editor surface", "已启用  ✓" to "Enabled  ✓",
-        "提示：左滑条目可重命名或移到回收站；长按也可操作。" to "Tip: swipe an item to rename or move it to Trash; long press also opens actions.",
-        "左滑条目可重命名或移到回收站；长按也可操作" to "Swipe an item to rename or move it to Trash; long press also opens actions.",
+        "提示：普通条目左滑可重命名或移到回收站；附件文件夹左滑可删除。长按也可操作。" to "Tip: swipe a regular item to rename or move it to Trash; swipe an attachment folder to delete it. Long press also opens actions.",
+        "普通条目左滑可重命名或移到回收站；附件文件夹左滑可删除。长按也可操作" to "Swipe a regular item to rename or move it to Trash; swipe an attachment folder to delete it. Long press also opens actions.",
         "设置不会移动已有笔记或附件。新建的每日笔记会按 yyyy-MM-dd.md 写入所选目录。" to "Settings do not move existing notes or attachments. New daily notes are written as yyyy-MM-dd.md in the selected folder.",
         "当前目录没有其他文件" to "No other files in this folder",
         "无法打开此文件，请安装支持该格式的查看器。" to "This file cannot be opened. Install an app that supports this format."

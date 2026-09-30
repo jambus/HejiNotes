@@ -118,6 +118,7 @@ class SwipeActionRow(
   private var onLongPress: (() -> Unit)? = null
   private var onRename: (() -> Unit)? = null
   private var onMoveToTrash: (() -> Unit)? = null
+  private var deleteOnly = false
   private var onOpenStateChanged: ((SwipeActionRow, Boolean) -> Unit)? = null
   private val renameActionId = View.generateViewId()
   private val trashActionId = View.generateViewId()
@@ -138,6 +139,36 @@ class SwipeActionRow(
     onLongPress: () -> Unit,
     onRename: () -> Unit,
     onMoveToTrash: () -> Unit,
+    onOpenStateChanged: (SwipeActionRow, Boolean) -> Unit
+  ) {
+    deleteOnly = false
+    bindCommon(foreground, actionStrip, title, accessibilityLabel, onActivate, onLongPress,
+      onRename, onMoveToTrash, onOpenStateChanged)
+  }
+
+  fun bindDeleteOnly(
+    foreground: View,
+    actionStrip: View,
+    title: String,
+    accessibilityLabel: String,
+    onActivate: () -> Unit,
+    onDelete: () -> Unit,
+    onOpenStateChanged: (SwipeActionRow, Boolean) -> Unit
+  ) {
+    deleteOnly = true
+    bindCommon(foreground, actionStrip, title, accessibilityLabel, onActivate, onDelete,
+      null, onDelete, onOpenStateChanged)
+  }
+
+  private fun bindCommon(
+    foreground: View,
+    actionStrip: View,
+    title: String,
+    accessibilityLabel: String,
+    onActivate: () -> Unit,
+    onLongPress: () -> Unit,
+    onRename: (() -> Unit)?,
+    onMoveToTrash: (() -> Unit)?,
     onOpenStateChanged: (SwipeActionRow, Boolean) -> Unit
   ) {
     removeAllViews()
@@ -311,7 +342,11 @@ class SwipeActionRow(
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) content.stateDescription = state
     content.contentDescription = "$rowAccessibilityLabel，$state"
     if (announce) announceForAccessibility(
-      if (UiLanguage.locale(context).language == "zh") "$rowTitle，已显示重命名和移到回收站操作" else "$rowTitle, rename and move-to-Trash actions shown"
+      if (deleteOnly) {
+        if (UiLanguage.locale(context).language == "zh") "$rowTitle，已显示删除操作" else "$rowTitle, delete action shown"
+      } else {
+        if (UiLanguage.locale(context).language == "zh") "$rowTitle，已显示重命名和移到回收站操作" else "$rowTitle, rename and move-to-Trash actions shown"
+      }
     )
   }
 
@@ -319,8 +354,17 @@ class SwipeActionRow(
     override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
       super.onInitializeAccessibilityNodeInfo(host, info)
       val english = UiLanguage.locale(context).language != "zh"
-      info.addAction(AccessibilityNodeInfo.AccessibilityAction(renameActionId, if (english) "Rename $rowTitle" else "重命名 $rowTitle"))
-      info.addAction(AccessibilityNodeInfo.AccessibilityAction(trashActionId, if (english) "Move $rowTitle to Trash" else "移到回收站 $rowTitle"))
+      if (!deleteOnly) {
+        info.addAction(AccessibilityNodeInfo.AccessibilityAction(renameActionId, if (english) "Rename $rowTitle" else "重命名 $rowTitle"))
+      }
+      info.addAction(AccessibilityNodeInfo.AccessibilityAction(
+        trashActionId,
+        if (deleteOnly) {
+          if (english) "Delete $rowTitle" else "删除 $rowTitle"
+        } else {
+          if (english) "Move $rowTitle to Trash" else "移到回收站 $rowTitle"
+        }
+      ))
     }
 
     override fun performAccessibilityAction(host: View, action: Int, arguments: android.os.Bundle?): Boolean {

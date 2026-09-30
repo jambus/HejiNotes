@@ -1650,6 +1650,77 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
     fun commitDirectAssetDelete(request: DirectAssetDeleteRequest): InlineAttachmentDeleteResult =
         finishDirectAssetDelete(request.marker, request.transaction)
 
+    fun prepareAssetFolderDelete(document: VaultDocument): AssetFolderDeleteResult {
+        return VaultSaveLock.withLock {
+            val port = createAssetFolderDeletePort()
+            AssetFolderDeleteOperation(port).prepare(document.relativePath)
+        }
+    }
+
+    fun commitAssetFolderDelete(snapshot: AssetFolderDeleteSnapshot): AssetFolderDeleteResult {
+        return VaultSaveLock.withLock {
+            val port = createAssetFolderDeletePort()
+            AssetFolderDeleteOperation(port).commit(snapshot)
+        }
+    }
+
+    private fun createAssetFolderDeletePort(): AssetFolderDeletePort = object : AssetFolderDeletePort {
+        override fun currentVaultUri(): String? = savedVaultUri()?.toString()
+
+        override fun safeToDelete(): Boolean = AppNoteSaveCoordinator.isVaultMutationBarrierClear() &&
+            pendingVideoCapture() == null && !hasUnresolvedMoveTransactions()
+
+        override fun resolve(path: String): AssetFolderDeletePort.Node? {
+            val tree = savedVaultUri() ?: return null
+            val doc = findByRelativePathStrict(tree, path) ?: return null
+            return AssetFolderDeletePort.Node(doc.relativePath, doc.uri.toString(), isDirectory(doc), doc.size)
+        }
+
+        override fun children(directory: AssetFolderDeletePort.Node): List<AssetFolderDeletePort.Node> {
+            val tree = savedVaultUri() ?: throw IllegalStateException("Vault unavailable")
+            val list = listChildrenStrict(tree, Uri.parse(directory.uri), directory.path)
+            return list.map { AssetFolderDeletePort.Node(it.relativePath, it.uri.toString(), isDirectory(it), it.size) }
+        }
+
+        override fun sha256(file: AssetFolderDeletePort.Node): String? = try {
+            resolver.openInputStream(Uri.parse(file.uri))?.use(::sha256)
+        } catch (_: Exception) { null }
+
+        override fun markdownFiles(): List<AssetFolderDeletePort.Markdown> {
+            val tree = savedVaultUri() ?: throw IllegalStateException("Vault unreadable")
+            val list = mutableListOf<AssetFolderDeletePort.Markdown>()
+            fun scan(directory: VaultDocument) {
+                val children = listChildrenStrict(tree, directory.uri, directory.relativePath)
+                for (doc in children) {
+                    if (isDirectory(doc)) {
+                        val rootName = doc.relativePath.substringBefore('/')
+                        if (!InlineAttachmentDeleteRecoveryPolicy.shouldScanRootDirectory(rootName)) continue
+                        scan(doc)
+                    } else if (doc.name.endsWith(".md", ignoreCase = true)) {
+                        val body = readText(doc) ?: throw IllegalStateException("Unreadable markdown: ${doc.relativePath}")
+                        list += AssetFolderDeletePort.Markdown(doc.relativePath, body)
+                    }
+                }
+            }
+            scan(VaultDocument(rootDocument(tree), "Vault", DocumentsContract.Document.MIME_TYPE_DIR))
+            return list
+        }
+
+        override fun deleteWholeFolder(folderUri: String): Boolean = try {
+            DocumentsContract.deleteDocument(resolver, Uri.parse(folderUri))
+        } catch (_: Exception) { false }
+
+        override fun presence(path: String): AssetFolderDeletePort.Presence {
+            val tree = savedVaultUri() ?: return AssetFolderDeletePort.Presence.UNKNOWN
+            return try {
+                val found = findByRelativePathStrict(tree, path)
+                if (found == null) AssetFolderDeletePort.Presence.ABSENT else AssetFolderDeletePort.Presence.PRESENT
+            } catch (_: Exception) {
+                AssetFolderDeletePort.Presence.UNKNOWN
+            }
+        }
+    }
+
     fun pendingInlineAttachmentDeleteCount(): Int {
         val tree = savedVaultUri() ?: return 0
         val directory = inlineAttachmentDeleteMarkerDirectory(tree) ?: return 0

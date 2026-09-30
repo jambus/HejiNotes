@@ -713,7 +713,7 @@ class MainActivity : Activity() {
                 content.addView(infoBanner("今日笔记目录已不可用，已改为 Vault 根目录。请在设置中重新选择目录。"),
                     matchWrap().apply { bottomMargin = dp(12) })
             }
-            val eligibleRows = folders.any { !VaultBrowserPolicy.isReadOnlyAttachmentPath(it.relativePath) } || notes.isNotEmpty()
+            val eligibleRows = folders.isNotEmpty() || notes.isNotEmpty()
             if (eligibleRows && !repository.swipeDiscoveryHintSeen()) {
                 content.addView(swipeDiscoveryHint(), matchWrap().apply { bottomMargin = dp(4) })
             }
@@ -723,8 +723,13 @@ class MainActivity : Activity() {
             } else {
                 content.addView(vaultGroup(folders.map { folder ->
                     if (VaultBrowserPolicy.isReadOnlyAttachmentPath(folder.relativePath)) {
-                        vaultRow(R.drawable.ic_browser_folder, folder.name, ui("附件目录"), ui("文件夹"), grouped = true) {
-                            openDirectory(folder)
+                        val deletable = VaultBrowserPolicy.canPermanentlyDeleteAttachmentFolder(folder.relativePath)
+                        if (deletable) {
+                            swipeableAttachmentFolderRow(folder) { openDirectory(folder) }
+                        } else {
+                            vaultRow(R.drawable.ic_browser_folder, folder.name, ui("附件目录"), ui("文件夹"), grouped = true) {
+                                openDirectory(folder)
+                            }
                         }
                     } else {
                         swipeableVaultRow(
@@ -3949,7 +3954,7 @@ class MainActivity : Activity() {
         val note = currentNote ?: return
         val generation = editorGeneration
         inlineAttachmentDeleteMessage = null
-        structuralIoExecutor.execute {
+        noteIoExecutor.executeIo {
             val vaultId = repository.savedVaultUri()?.toString().orEmpty()
             val lease = VaultMutationLease.tryAcquire(vaultId, VaultMutationLease.Kind.STRUCTURAL)
             val prepared = if (lease == null) {
@@ -4027,7 +4032,7 @@ class MainActivity : Activity() {
     }
 
     private fun finishPreparedInlineAttachmentDelete(request: InlineAttachmentDeleteRequest, generation: Long) {
-        structuralIoExecutor.execute {
+        noteIoExecutor.executeIo {
             val vaultId = repository.savedVaultUri()?.toString().orEmpty()
             val lease = VaultMutationLease.tryAcquire(vaultId, VaultMutationLease.Kind.STRUCTURAL)
             val result = if (lease == null) {
@@ -4198,10 +4203,10 @@ class MainActivity : Activity() {
         minimumHeight = dp(52)
         setPadding(dp(14), dp(6), dp(8), dp(6))
         background = rounded(COLOR_ROW, dp(12))
-        contentDescription = ui("提示：左滑条目可重命名或移到回收站；长按也可操作。")
+        contentDescription = ui("提示：普通条目左滑可重命名或移到回收站；附件文件夹左滑可删除。长按也可操作。")
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         addView(TextView(this@MainActivity).apply {
-            text = ui("左滑条目可重命名或移到回收站；长按也可操作")
+            text = ui("普通条目左滑可重命名或移到回收站；附件文件夹左滑可删除。长按也可操作")
             textSize = 13f
             setTextColor(COLOR_SECONDARY_TEXT)
         }, LinearLayout.LayoutParams(0, -2, 1f))
@@ -4209,7 +4214,7 @@ class MainActivity : Activity() {
             (parent as? android.view.ViewGroup)?.removeView(this)
         }, wrapWrap())
         repository.markSwipeDiscoveryHintSeen()
-        post { announceForAccessibility(ui("提示：左滑条目可重命名或移到回收站；长按也可操作。")) }
+        post { announceForAccessibility(ui("提示：普通条目左滑可重命名或移到回收站；附件文件夹左滑可删除。长按也可操作。")) }
     }
 
     private fun vaultGroup(rows: List<View>): View = LinearLayout(this).apply {
@@ -4296,7 +4301,7 @@ class MainActivity : Activity() {
         document: VaultDocument,
         activate: () -> Unit
     ): View {
-        val actionsWidth = swipeActionWidthPx() * 2
+        val actionsWidth = swipeActionWidthPx("重命名", "删除") * 2
         val row = SwipeActionRow(
             this,
             actionsWidth,
@@ -4339,20 +4344,59 @@ class MainActivity : Activity() {
         return row
     }
 
+    private fun swipeableAttachmentFolderRow(
+        folder: VaultDocument,
+        activate: () -> Unit
+    ): View {
+        val actionsWidth = swipeActionWidthPx("删除")
+        val row = SwipeActionRow(this, actionsWidth, ViewConfiguration.get(this).scaledTouchSlop)
+        val actionStrip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(swipeAction("删除", "删除 ${folder.name}", COLOR_TRASH_ACTION) {
+                row.close(animated = false)
+                confirmAssetFolderDelete(folder)
+            }, LinearLayout.LayoutParams(-1, -1))
+        }
+        val subtitle = ui("附件目录")
+        val itemType = ui("文件夹")
+        val label = listOf(itemType, folder.name, subtitle).joinToString("，")
+        val foreground = vaultRow(
+            R.drawable.ic_browser_folder, folder.name, subtitle, itemType, grouped = true, action = activate
+        )
+        row.bindDeleteOnly(
+            foreground = foreground,
+            actionStrip = actionStrip,
+            title = folder.name,
+            accessibilityLabel = label,
+            onActivate = { if (!consumeSwipeDismissActivation()) activate() },
+            onDelete = { confirmAssetFolderDelete(folder) },
+            onOpenStateChanged = { changedRow, isOpen ->
+                if (isOpen) {
+                    openSwipeRow?.takeIf { it !== changedRow }?.close(animated = false)
+                    openSwipeRow = changedRow
+                } else if (openSwipeRow === changedRow) {
+                    openSwipeRow = null
+                }
+            }
+        )
+        return row
+    }
+
     private fun consumeSwipeDismissActivation(): Boolean {
         val suppress = SwipeDismissTouchPolicy.suppressActivation(swipeDismissTouch)
         if (suppress) swipeDismissTouch = null
         return suppress
     }
 
-    private fun swipeActionWidthPx(): Int {
+    private fun swipeActionWidthPx(vararg labels: String): Int {
         val fontScale = resources.configuration.fontScale.coerceAtLeast(1f)
         val scaledMinimum = dp(SWIPE_ACTION_WIDTH_DP) * fontScale
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = SWIPE_ACTION_TEXT_SP * resources.displayMetrics.scaledDensity
             typeface = Typeface.DEFAULT_BOLD
         }
-        val widestLabel = maxOf(textPaint.measureText("重命名"), textPaint.measureText("删除"))
+        val widestLabel = labels.maxOfOrNull { textPaint.measureText(it) } ?: 0f
         val textWidth = widestLabel + dp(SWIPE_ACTION_HORIZONTAL_PADDING_DP * 2)
         return ceil(maxOf(scaledMinimum, textWidth).toDouble()).toInt()
     }
@@ -4561,6 +4605,69 @@ class MainActivity : Activity() {
                         browserMutationMessage = result.message
                         browserSnapshot?.let { renderVaultBrowser(it.rootDirectory, it.directoryReadable, it.children, it.previews) }
                     }
+                }
+            }
+        }
+    }
+
+    private fun confirmAssetFolderDelete(document: VaultDocument) {
+        if (browserMutationPending) return
+        browserMutationPending = true
+        val generation = browserLoadGeneration
+        noteIoExecutor.executeIo {
+            val prepared = repository.prepareAssetFolderDelete(document)
+            runOnUiThread {
+                if (isFinishing || isDestroyed || screen != Screen.BROWSER || generation != browserLoadGeneration) {
+                    browserMutationPending = false
+                    return@runOnUiThread
+                }
+                browserMutationPending = false
+                when (prepared) {
+                    is AssetFolderDeleteResult.Rejected -> {
+                        browserMutationMessage = prepared.message
+                        browserSnapshot?.let { renderVaultBrowser(it.rootDirectory, it.directoryReadable, it.children, it.previews) }
+                    }
+                    is AssetFolderDeleteResult.Ready -> {
+                        val snapshot = prepared.snapshot
+                        dialogBuilder()
+                            .setTitle("永久删除附件文件夹？")
+                            .setMessage("将永久删除“${document.name}”（包含 ${snapshot.fileCount} 个文件、${snapshot.directoryCount} 个子文件夹），此操作不可撤销。若任何 Markdown 仍引用此目录或其内容，或无法安全确认，整个目录将完整保留。")
+                            .setNegativeButton("取消", null)
+                            .setPositiveButton("永久删除") { _, _ -> runAssetFolderDelete(snapshot, document) }
+                            .show()
+                    }
+                    AssetFolderDeleteResult.Deleted -> Unit
+                }
+            }
+        }
+    }
+
+    private fun runAssetFolderDelete(snapshot: AssetFolderDeleteSnapshot, document: VaultDocument) {
+        browserMutationPending = true
+        val generation = browserLoadGeneration
+        noteIoExecutor.executeIo {
+            val vaultId = repository.savedVaultUri()?.toString().orEmpty()
+            val lease = VaultMutationLease.tryAcquire(vaultId, VaultMutationLease.Kind.STRUCTURAL)
+            val result = if (lease == null) {
+                AssetFolderDeleteResult.Rejected("当前 Vault 正在同步，请完成后重试")
+            } else try {
+                repository.commitAssetFolderDelete(snapshot)
+            } finally {
+                VaultMutationLease.release(lease)
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed || screen != Screen.BROWSER || generation != browserLoadGeneration) return@runOnUiThread
+                browserMutationPending = false
+                when (result) {
+                    AssetFolderDeleteResult.Deleted -> {
+                        browserMutationMessage = "附件文件夹已永久删除"
+                        renderBrowserAfterConfirmedMove(document)
+                    }
+                    is AssetFolderDeleteResult.Rejected -> {
+                        browserMutationMessage = result.message
+                        browserSnapshot?.let { renderVaultBrowser(it.rootDirectory, it.directoryReadable, it.children, it.previews) }
+                    }
+                    is AssetFolderDeleteResult.Ready -> Unit
                 }
             }
         }

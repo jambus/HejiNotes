@@ -172,6 +172,23 @@ file, verifies strict absence, records `DELETED`, then removes the marker. A ref
 terminal rejection. Ambiguous or unreadable scans, changed identity, unknown deletion results or
 permission loss retain the file; retryable uncertainty retains the marker. Direct deletion never
 deletes sibling files or the containing bundle directory.
+
+An explicit attachment-folder deletion may target an `assets` or `attachments` root or any
+directory below one of those segments, including a note attachment bundle. Before confirmation,
+the client creates only an ephemeral immutable snapshot: the fixed Vault authorization identity,
+folder path and provider identity, plus a deterministically sorted recursive manifest containing
+every directory and every file identity, Provider size (or `-1` when unavailable) and SHA-256.
+Only exact lowercase `assets` / `attachments` path segments are eligible. Hidden/internal content, active
+transaction artifacts, ambiguous paths, unknown reads, pending or failed note saves, and active
+photo/video work reject preparation. Confirmation displays counts from that frozen snapshot.
+After confirmation, on the same note-save serial queue and while holding the same-Vault structural
+lease, the client revalidates the fixed Vault, repeats the strict manifest and full Markdown scan
+(including `.trash`, `assets`, and `attachments`, excluding only internal metadata), and rejects
+direct links to the folder/prefix or descendants as well as ambiguous syntax (including a
+conservative wiki-basename match). It repeats safety checks immediately before invoking exactly
+one Provider whole-folder `deleteDocument` call, then requires strict absence. It never performs
+recursive child deletion, writes a deletion marker, or retries automatically; every new attempt
+requires a new snapshot and confirmation.
 “Clear trash” permanently deletes only the current contents directly below the Vault-root
 `.trash/` after explicit user confirmation. The recycle-bin browser lists only direct children;
 Markdown may be inspected read-only, but no in-app restore is implied. Single-item and clear

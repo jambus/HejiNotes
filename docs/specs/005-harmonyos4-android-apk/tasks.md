@@ -119,7 +119,12 @@
   测试；真实 Graph HTTP 行为仍由 T568 真机验收（FR-536）。
 - [ ] T568 Mate 60：配置真实 Entra 应用并验证个人/组织账户、登录回调、目录选择、大小文件、
   后台继续/取消、令牌失效、冲突和中断恢复；完成前 `0.6.0` 不得标记候选（FR-536）。
+- [x] T569 Android：为附件文件夹增加左滑“删除”及基于不可变递归快照的整体删除；串行化正文保存、结构租约、
+  双重全 Vault 引用复核、单次 Provider 整体删除及严格结果确认，并覆盖不可读、外变、引用、
+  Provider 不确定和操作边界测试（FR-537）。
+- [ ] T570 Mate 60：验证空/非空 assets、嵌套 bundle、引用拒绝、确认后外变、Provider 整体删除、
+  权限失效、同步/保存占用、TalkBack、旋转和进程中断；完成前不得标记候选（FR-537）。
 
 上一个 `0.5.0` / `versionCode 9` 基线已在本机通过共享 Vault 契约检查与 debug APK 构建。
-当前 `0.6.0` / `versionCode 12` 已通过 276 项 Android 单测和 fresh debug APK 打包；完成 T568
-真实 OneDrive 与 Mate 60 验收后才能进入候选状态。
+当前 `0.6.1` / `versionCode 13` 已通过 300 项 Android 单测、fresh debug APK、共享 Vault 契约
+检查和 HAP 兼容构建；完成 T568、T570 的真实服务与 Mate 60 验收后才能进入候选状态。

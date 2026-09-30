@@ -23,10 +23,14 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
 - Google Drive / OneDrive 点击确认后立即禁用启动按钮并显示准备状态；服务受理后自动刷新同步入口。
 - 设置、Provider 页面和同步详情订阅任务状态；前台恢复时重新读取，进度刷新保留滚动位置，不重建编辑器或文件夹选择器。
 - 保留服务拒绝、失败、取消和完成状态；启动异常返回可重试页面，不改动同步引擎或 Vault 契约。
-- 验证：2026-09-29 主代理执行 `:app:testDebugUnitTest :app:assembleDebug` 成功，281 项测试
-  全部通过（0 failure / error / skip），包含 5 项新增确认状态与订阅回归；本次重新编译并打包。
-  独立设计审查已完成，独立测试与最终复核因代理额度限制未完成；真实账号、前后台切换与编辑连续性待 Mate 验收。
-- Debug APK SHA-256：`936b8e5e5b22db2b08c63fecc917c4aa7b3a954856957789ebc8bf828e376e00`。
+- Android 文件库中的 `assets` / `attachments` 附件文件夹左滑后显示“删除”，不再常驻垃圾桶图标；确认框仍说明永久删除；确认前显示冻结
+  清单的文件/子目录数，确认后再次核对 Vault、完整内容、保存状态和所有 Markdown 引用，只调用
+  一次 Provider 整体目录删除。任何引用、不可读、外变或结果不确定均保留整个目录并要求重新确认。
+- 验证：2026-09-30 主代理和独立测试者执行 `:app:testDebugUnitTest :app:assembleDebug` 成功，
+  300 项测试全部通过（0 failure / error / skip），其中附件文件夹删除专项 19 项；共享 Vault
+  契约检查与 HAP 兼容构建通过。独立测试及原设计评审者最终复审均无阻断问题；真实账号、
+  前后台切换、附件目录删除和编辑连续性仍待 Mate 验收。
+- Debug APK SHA-256：`464d3cc27ba59d4beca53af91eaf7f6d2b027896451402c3abc2ea5e28ea078f`。
 
 ## 0.6.0 — Android OneDrive 同步
 
