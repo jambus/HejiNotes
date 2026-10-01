@@ -240,7 +240,7 @@ class AssetFolderDeleteTest {
     }
 
     @Test
-    fun `prepare rejects when code snippet mentions folder path`() {
+    fun `empty folder accepts code path mentions and deletes once`() {
         val port = FakePort().apply {
             val root = AssetFolderDeletePort.Node("assets/sub", "content://assets/sub", true, null)
             nodes["assets/sub"] = root
@@ -250,8 +250,65 @@ class AssetFolderDeleteTest {
 
         val op = AssetFolderDeleteOperation(port)
         val result = op.prepare("assets/sub")
+        assertTrue(result is AssetFolderDeleteResult.Ready)
+        assertEquals(AssetFolderDeleteResult.Deleted, op.commit((result as AssetFolderDeleteResult.Ready).snapshot))
+        assertEquals(listOf("content://assets/sub"), port.deletedUris)
+    }
+
+    @Test
+    fun `directory only attachment trees allow prose and stale raw paths`() {
+        listOf("assets", "attachments", "Projects/assets/bundle").forEach { path ->
+            val port = FakePort().apply {
+                val root = AssetFolderDeletePort.Node(path, "content://$path", true, null)
+                val sub = AssetFolderDeletePort.Node("$path/empty", "content://$path/empty", true, null)
+                nodes[path] = root
+                childMap[path] = listOf(sub)
+                markdowns += AssetFolderDeletePort.Markdown("note.md", "附件曾保存在 $path/old.jpg\n`$path/`\n")
+            }
+            val op = AssetFolderDeleteOperation(port)
+            val ready = op.prepare(path) as AssetFolderDeleteResult.Ready
+            assertEquals(AssetFolderDeleteResult.Deleted, op.commit(ready.snapshot))
+            assertEquals(listOf("content://$path"), port.deletedUris)
+        }
+    }
+
+    @Test
+    fun `even a zero byte file retains residual path protection`() {
+        val port = FakePort().apply {
+            val root = AssetFolderDeletePort.Node("assets", "content://assets", true, null)
+            val file = AssetFolderDeletePort.Node("assets/a.jpg", "content://assets/a.jpg", false, 0L)
+            nodes[root.path] = root
+            childMap[root.path] = listOf(file)
+            fileHashes[file.path] = "empty-file-hash"
+            markdowns += AssetFolderDeletePort.Markdown("note.md", "照片位置：`assets/`")
+        }
+        val result = AssetFolderDeleteOperation(port).prepare("assets")
         assertTrue(result is AssetFolderDeleteResult.Rejected)
-        assertEquals("存在无法安全确认的 Markdown 引用", (result as AssetFolderDeleteResult.Rejected).message)
+        assertTrue(port.deletedUris.isEmpty())
+    }
+
+    @Test
+    fun `empty folder still rejects explicit descendant and malformed links`() {
+        listOf("[旧图](assets/missing.jpg)", "[目录](assets/)", "[图](../../assets/missing.jpg)", "![[assets/missing.jpg]]").forEach { body ->
+            val port = FakePort().apply {
+                val root = AssetFolderDeletePort.Node("assets", "content://assets", true, null)
+                nodes[root.path] = root
+                markdowns += AssetFolderDeletePort.Markdown("note.md", body)
+            }
+            assertTrue(body, AssetFolderDeleteOperation(port).prepare("assets") is AssetFolderDeleteResult.Rejected)
+            assertTrue(port.deletedUris.isEmpty())
+        }
+    }
+
+    @Test
+    fun `empty folder still rejects unreadable markdown`() {
+        val port = FakePort().apply {
+            val root = AssetFolderDeletePort.Node("assets", "content://assets", true, null)
+            nodes[root.path] = root
+            markdownProvider = { throw IllegalStateException("unreadable") }
+        }
+        assertTrue(AssetFolderDeleteOperation(port).prepare("assets") is AssetFolderDeleteResult.Rejected)
+        assertTrue(port.deletedUris.isEmpty())
     }
 
     @Test

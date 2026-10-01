@@ -153,6 +153,10 @@ class AssetFolderDeleteOperation(private val port: AssetFolderDeletePort) {
                 }
             }
 
+            // A strictly read directory-only tree has no attachment files for residual text to
+            // reference. Explicit destinations above and Markdown readability still protect it.
+            if (fileNodes.isEmpty()) continue
+
             // 3. Residual text scan (after stripping link syntax) for embedded code or raw paths
             var residual = body
             listOf(INLINE, DEFINITION, WIKI, HTML).forEach { residual = it.replace(residual, "") }

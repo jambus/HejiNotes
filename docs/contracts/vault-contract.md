@@ -189,6 +189,11 @@ conservative wiki-basename match). It repeats safety checks immediately before i
 one Provider whole-folder `deleteDocument` call, then requires strict absence. It never performs
 recursive child deletion, writes a deletion marker, or retries automatically; every new attempt
 requires a new snapshot and confirmation.
+For a strictly enumerated directory-only tree (no files at any depth), residual prose, code,
+or raw-path mentions alone do not count as ambiguous attachment references. Parsed local links
+to the folder or its prefix, recognized links with unresolvable local destinations, and unreadable Markdown still
+block deletion. Both pre-confirmation and commit scans apply this rule; any new file invalidates
+the frozen manifest and requires a new confirmation.
 “Clear trash” permanently deletes only the current contents directly below the Vault-root
 `.trash/` after explicit user confirmation. The recycle-bin browser lists only direct children;
 Markdown may be inspected read-only, but no in-app restore is implied. Single-item and clear

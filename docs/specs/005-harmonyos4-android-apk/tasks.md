@@ -124,6 +124,10 @@
   Provider 不确定和操作边界测试（FR-537）。
 - [ ] T570 Mate 60：验证空/非空 assets、嵌套 bundle、引用拒绝、确认后外变、Provider 整体删除、
   权限失效、同步/保存占用、TalkBack、旋转和进程中断；完成前不得标记候选（FR-537）。
+- [ ] T571 Android：修复空附件目录树因说明/代码残余路径而误报模糊引用，验证目录显式链接、
+  不可读内容、非空模糊引用及确认后新增文件仍受保护（FR-537）。
+  源码与回归用例已完成；2026-10-01 当前主机缺少 Java、Android SDK 和 DevEco 工具链，
+  fresh 单测与双端打包待恢复环境后执行，不以历史产物作为本次验证。
 
 上一个 `0.5.0` / `versionCode 9` 基线已在本机通过共享 Vault 契约检查与 debug APK 构建。
 当前 `0.6.1` / `versionCode 13` 已通过 300 项 Android 单测、fresh debug APK、共享 Vault 契约
