@@ -6,12 +6,20 @@ Classify implementation risk in the first progress update. File count alone is
 not a risk signal. The coordinator always owns scope, integration, validation,
 and the final report.
 
+Model aliases: Sol = GPT-6.1 Sol (`gpt-6.1-sol`), `medium`; Luna = GPT-6 Luna
+(`gpt-6-luna`), `max`; Astra = GPT-6 Astra (`gpt-6-astra`), `medium`.
+Use Sol for core implementation and architecture. Escalate coordination/review
+to Astra only for exceptionally complex architecture, ambiguity, or cross-system
+effects. Keep the workflow below when escalating; use Luna only for bounded L0
+work. These rules guide model selection where supported; they do not switch an
+already-running coordinator's model.
+
 | Level | Scope | Model and workflow |
 | --- | --- | --- |
-| L0 | Questions, read-only work, typo fixes, isolated documentation, formatting, inventories, boilerplate, or test data | Simple mode: GPT-6 Luna, `max`; one agent, no separate review. |
-| L1 | Routine implementation, local UI, or pure logic without persistence, permission, or contract effects | Simple mode: GPT-5.6 Sol, `medium`; one agent performs discovery, implementation, affected tests, and reporting. |
-| L2 | Architecture or design review, hard bugs, compatibility, lifecycle issues, or substantial/multi-screen UX without Vault, sync, concurrency, or security risk | Multi-agent mode: GPT-5.6 Sol, `medium`, or GPT-6 Astra, `low`, reviews; GPT-5.6 Sol, `medium`, implements and validates; the original reviewer performs final review. |
-| L3 | Vault data, deletion, permissions, sync, concurrency, migrations, cross-client contracts, or security | Multi-agent mode: GPT-5.6 Sol, `medium`, or GPT-6 Astra, `low`, reviewer → GPT-5.6 Sol, `medium`, developer → independent GPT-5.6 Sol, `medium`, tester → original reviewer. Use GPT-6 Astra, `medium`, as coordinator/reviewer only for exceptionally complex work. |
+| L0 | Questions, read-only work, typo fixes, isolated documentation, formatting, inventories, boilerplate, or test data | Simple mode: Luna; one agent, no separate review. |
+| L1 | Routine implementation, local UI, or pure logic without persistence, permission, or contract effects | Simple mode: Sol; one agent performs discovery, implementation, affected tests, and reporting. |
+| L2 | Architecture or design review, hard bugs, compatibility, lifecycle issues, or substantial/multi-screen UX without Vault, sync, concurrency, or security risk | Multi-agent mode: Sol performs read-only design review → Sol implements and validates → original reviewer performs final review. |
+| L3 | Vault data, deletion, permissions, sync, concurrency, migrations, cross-client contracts, or security | Multi-agent mode: Sol reviewer → Sol developer → independent Sol tester → original reviewer. |
 
 Use GPT-family models only in Codex. Treat an unknown environment as Codex until
 confirmed; do not infer it from paths, editor files, or installed integrations.
