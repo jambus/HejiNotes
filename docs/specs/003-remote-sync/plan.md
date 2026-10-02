@@ -13,7 +13,16 @@ Provider 共用文件内容流、基线、断点与错误契约及测试样例�
 - [x] 冲突默认保留两份。
 - [x] 登录状态优先使用系统安全存储，能力不足时仅驻留内存。
 - [x] 增量状态只在整轮成功且两端摘要一致后提交。
-- [ ] Google Drive 与两台目标 NAS 真实环境通过故障注入测试。
+- [ ] 当前 Android Google Drive/OneDrive 的真实环境故障注入通过（T317/T329/T330）。
+- [ ] 后续两台目标 NAS 的协议兼容与故障注入通过（T311–T314），不混作 Android 当前云盘验收。
+
+## 当前实现与验收边界（2026-10-02）
+
+Drive 条件写入/回收、双 Provider 三方删除与 MoveBundle 已有实现及自动化覆盖；
+剩余任务分别由 T317/T329/T330/T321 管理实云盘/设备证据。退避策略保留 T316，
+Drive changes/可恢复上传/范围下载从组合条目拆到 T310b。NAS 后续协议工作独立管理。
+不因已有模拟测试取消真实服务的 ETag、账号授权、弱网、取消和中断验收。
+以下交付阶段保留为历史/长期顺序，当前稳定性收口以 `008/tasks.md` 为执行入口。
 
 ## Delivery Order
 
@@ -25,7 +34,7 @@ Provider 共用文件内容流、基线、断点与错误契约及测试样例�
 5. 增加配置、提供方无关的后台任务状态、进度、取消、通知、详情、错误摘要和手动同步 UI。
 6. 完成多设备、弱网、令牌失效和 NAS 兼容性验证。
 7. Android 将 Google Drive 传输逐步收敛到既有 `SyncProvider`、`SyncPlanner`、`SyncEngine`
-   契约；先保持“不传播普通删除”和 MoveBundle 语义，再新增其他 Provider，不能以复制 HAP
+   契约；早期“不传播普通删除”阶段已由当前三方基线可恢复删除替代，保持 MoveBundle 与删除保护语义，不能以复制 HAP
    实现替代 Android 的并发与恢复验证。
 8. Android 复用已验证的分层文件同步引擎接入 OneDrive：MSAL 只负责账号与短期令牌，
    Microsoft Graph adapter 负责目录/内容/ETag/上传会话/回收站 I/O；Provider 名称、目录类型、

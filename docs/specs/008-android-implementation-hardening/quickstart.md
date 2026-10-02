@@ -154,3 +154,19 @@ cd android
   未连接/重登录的展示和详情返回；中文/English、深浅色、最大字体与横竖屏均需人工检查。
 - 按 `review_checklist.md`：范围/设计追溯、Provider 归属及配置导航静态通过；Vault/保存/相机
   行为不受本次改动影响；设备布局、辅助技术和实际点击仍待验证，不以构建替代。
+
+## FR-839 · 裁剪边缘验收（0.6.5 / 17）
+
+- 自动化（2026-10-02）：使用已有 OpenJDK 17（本机无 DevEco JBR）与 Android SDK，
+  在 `android/` 执行 `./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon`，
+  16s 成功，36 tasks / 17 executed；46 suites / 363 tests，0 failures/errors/skips。
+  新增 3 项几何测试覆盖横竖屏、密度 1/2.75/3、普通与细长照片、完整源坐标往返、
+  极小/零区域。fresh APK 为 `android/app/build/outputs/apk/debug/app-debug.apk`，
+  7,195,584 bytes，SHA-256 `3d6b429da712e60a6b2ee67c63d2104f0b6b89777e39b01f3bd67a4c02f8bfc1`。
+  保留既有 AGP/SDK 与 deprecated API 警告；未安装、未发布。
+- 原 reviewer 最终只读复查通过，无待修复发现。设计评审清单的范围追溯、完整原图、
+  原始坐标与默认选区、单一绘制/触摸矩形和密度热区静态通过；设备交互项待验收。
+- 设备验收未执行：Mate 60 拍摄横向、纵向、长宽照片，确认默认整图且四角远离
+  手机边缘；四角拖至原图边界与向内裁剪、切换模式、旋转后仍可准确操作。检查
+  深浅色与最大字体。插入后重启并确认图片与相对 Markdown 链接有效；HAP 同样
+  单独执行拍照/重启/链接检查，不将 Android 证据当作 HAP 验收。

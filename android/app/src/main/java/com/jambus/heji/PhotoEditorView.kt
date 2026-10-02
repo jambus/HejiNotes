@@ -3,19 +3,14 @@ package com.jambus.heji
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PointF
-import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.hypot
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 enum class PhotoEditMode { RECTANGLE, PERSPECTIVE }
 
@@ -52,20 +47,14 @@ class PhotoEditorView(context: android.content.Context, private val bitmap: Bitm
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        val scale = min(w.toFloat() / bitmap.width, h.toFloat() / bitmap.height)
-        val left = (w - bitmap.width * scale) / 2f
-        val top = (h - bitmap.height * scale) / 2f
-        imageRect.set(left, top, left + bitmap.width * scale, top + bitmap.height * scale)
+        val preview = PhotoPreviewLayout.fit(w, h, bitmap.width, bitmap.height, resources.displayMetrics.density)
+        imageRect.set(preview.left, preview.top, preview.right, preview.bottom)
         updateGestureExclusion()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.drawColor(Color.BLACK)
-        val scale = min(width.toFloat() / bitmap.width, height.toFloat() / bitmap.height)
-        val left = (width - bitmap.width * scale) / 2f
-        val top = (height - bitmap.height * scale) / 2f
-        imageRect.set(left, top, left + bitmap.width * scale, top + bitmap.height * scale)
         canvas.drawBitmap(bitmap, null, imageRect, imagePaint)
 
         if (selectionVisible) {
@@ -78,12 +67,13 @@ class PhotoEditorView(context: android.content.Context, private val bitmap: Bitm
             }
             canvas.drawPath(path, linePaint)
             handles.forEach { point ->
-                canvas.drawCircle(viewX(point.x), viewY(point.y), 18f, handlePaint)
+                canvas.drawCircle(viewX(point.x), viewY(point.y), HANDLE_RADIUS_DP * resources.displayMetrics.density, handlePaint)
             }
         }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (imageRect.width() <= 0f || imageRect.height() <= 0f) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (!selectionVisible) return false
@@ -190,7 +180,7 @@ class PhotoEditorView(context: android.content.Context, private val bitmap: Bitm
         var distance = Float.MAX_VALUE
         handles.forEachIndexed { index, point ->
             val candidate = hypot(viewX(point.x) - x, viewY(point.y) - y)
-            if (candidate < distance && candidate <= 60f) {
+            if (candidate < distance && candidate <= HANDLE_TOUCH_RADIUS_DP * resources.displayMetrics.density) {
                 distance = candidate
                 nearest = index
             }
@@ -202,10 +192,10 @@ class PhotoEditorView(context: android.content.Context, private val bitmap: Bitm
     private fun viewY(imageY: Float): Float = imageRect.top + imageY / bitmap.height * imageRect.height()
     private fun imageX(viewX: Float): Float = ((viewX - imageRect.left) / imageRect.width() * bitmap.width)
     private fun imageY(viewY: Float): Float = ((viewY - imageRect.top) / imageRect.height() * bitmap.height)
-    private fun distance(a: PointF, b: PointF): Float = hypot(a.x - b.x, a.y - b.y)
 
     companion object {
         private const val EDGE_SAFE_INSET_DP = 40f
-        private const val GESTURE_EXCLUSION_RADIUS_DP = 40f
+        private const val HANDLE_RADIUS_DP = 6f
+        private const val HANDLE_TOUCH_RADIUS_DP = 24f
     }
 }
