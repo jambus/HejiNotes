@@ -1025,7 +1025,7 @@ class MainActivity : Activity() {
             drivePreferences.lastSuccessAt(vaultId, driveBinding.root.id, accountId) > 0L -> getString(R.string.drive_status_last_sync, driveBinding.root.name, formatSyncTime(drivePreferences.lastSuccessAt(vaultId, driveBinding.root.id, accountId)))
             else -> getString(R.string.drive_status_selected, driveBinding.root.name)
         }
-        content.addView(settingsRow("Google Drive", driveStatus, false) { showDriveSetup() }, matchWrap())
+        content.addView(syncSettingsGroup("google_drive", "Google Drive", driveStatus) { showDriveSetup() }, matchWrap())
         val oneDriveBinding = oneDrivePreferences.binding(vaultId)
         val oneDriveStatus = when {
             syncSnapshot?.isRunning == true && syncSnapshot.providerId == "onedrive" ->
@@ -1040,21 +1040,9 @@ class MainActivity : Activity() {
             )
             else -> getString(R.string.drive_status_selected, oneDriveBinding.root.name)
         }
-        content.addView(settingsRow("OneDrive", oneDriveStatus, false) { showOneDriveSetup() }, matchWrap().apply {
+        content.addView(syncSettingsGroup("onedrive", "OneDrive", oneDriveStatus) { showOneDriveSetup() }, matchWrap().apply {
             topMargin = dp(8)
         })
-        for (provider in listOf("google_drive" to "Google Drive", "onedrive" to "OneDrive")) {
-            currentSyncSnapshot(provider.first)?.let { snapshot ->
-                content.addView(settingsRow("${provider.second} · ${ui("同步详情")}", snapshot.statusLabel(this), false) {
-                    showSyncDetails(provider.first)
-                }, matchWrap().apply { topMargin = dp(8) })
-            }
-        }
-        syncSnapshot?.let { snapshot ->
-            content.addView(settingsRow(ui("同步详情"), snapshot.statusLabel(this), false) { showSyncDetails() }, matchWrap().apply {
-                topMargin = dp(8)
-            })
-        }
         sectionLabel(content, ui("每日笔记"))
         val path = repository.dailyNoteDirectoryPath().ifBlank { "Vault 根目录" }
         content.addView(settingsRow(ui("今日笔记目录"), path, false) { showDailyFolderPicker(true) }, matchWrap())
@@ -4456,6 +4444,27 @@ class MainActivity : Activity() {
         openSwipeRow = null
         row.close(animated)
         return true
+    }
+
+    private fun syncSettingsGroup(providerId: String, providerName: String, status: String, configure: () -> Unit): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(COLOR_ROW, dp(14))
+        clipToOutline = true
+        addView(settingsRow(providerName, status, false, configure).apply {
+            background = rippleBackground(COLOR_ROW, 0)
+        }, matchWrap())
+        currentSyncSnapshot(providerId)?.let { snapshot ->
+            addView(View(this@MainActivity).apply { setBackgroundColor(COLOR_DIVIDER) },
+                LinearLayout.LayoutParams(-1, dp(1)).apply {
+                    leftMargin = dp(16)
+                    rightMargin = dp(16)
+                })
+            addView(settingsRow(getString(R.string.sync_provider_details_title, providerName), snapshot.statusLabel(this@MainActivity), false) {
+                showSyncDetails(providerId)
+            }.apply {
+                background = rippleBackground(COLOR_ROW, 0)
+            }, matchWrap())
+        }
     }
 
     private fun settingsRow(title: String, subtitle: String, selected: Boolean, action: () -> Unit): View = LinearLayout(this).apply {

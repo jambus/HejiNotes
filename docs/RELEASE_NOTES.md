@@ -15,6 +15,19 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
   构建记录后，才能标记为“已发布”。
 - 尚未完成的优化不写入“已实现功能”，统一关联到对应编号规格的未完成任务。
 
+## 0.6.4 — 设置页同步详情分组
+
+**状态**：开发调试版，本次单测/fresh APK 通过，待 Mate UI 验收（非候选，未发布）
+**Android 安装包版本**：`versionName = 0.6.4`，`versionCode = 16`
+
+- GitHub #2 / `008` FR-838：Google Drive 与 OneDrive 的配置和详情各自放入连续分组，
+  移除额外通用详情入口。无记录时只显示配置；已有历史的服务仍可独立查看结果。
+- 仅改变 Android UI，沿用现有 Provider/Vault 查询、配置和同步行为；保留既有同步加固修改。
+- 本次自动化结果及真机布局/导航证据在 `008/quickstart.md` 单独记录。
+- 2026-10-02 本次构建：45 suites / 360 tests 全部通过，fresh APK 7,194,684 bytes；
+  SHA-256 `7e064e5c08e01f1c9a69f074336fccd0b1fc938f5da2795690a5d01d59659e70`。
+  使用已有 OpenJDK 17（本机未安装 DevEco JBR）。未安装、未发布，设备验证待执行。
+
 ## 0.6.3 — 同步复审安全边界补齐
 
 **状态**：自动化与 fresh APK 通过，待实际 SAF/云盘与 Mate 验收（非候选，未发布）

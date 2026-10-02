@@ -138,3 +138,19 @@ cd android
 每次真机验收按 [`../005-harmonyos4-android-apk/quickstart.md`](../005-harmonyos4-android-apk/quickstart.md)
 记录设备、系统、APK 版本、步骤结果和例外；未通过项须注明用户影响与后续计划。
 本次 D16 自动化/构建门槛见 [同步基线验收记录](sync-baseline-acceptance.md)。
+
+## GitHub #2 / FR-838 · 设置同步分组验收（0.6.4 / 16）
+
+- 自动化（2026-10-02）：在 `android/` 使用已有 OpenJDK 17 和 Android SDK 执行
+  `./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon` 成功（14s；36 tasks，11 executed）。
+  45 suites / 360 tests，0 failures/errors/skips；本次重新执行单测并编译/打包 UI 改动。
+  首次构建发现新分组中 Context 接收者类型错误，已修正并执行上述完整验证。
+  DevEco JBR 本机不可用，使用已有 OpenJDK 17；保留原有 AGP/SDK 和 deprecated API 警告。
+  fresh APK：`android/app/build/outputs/apk/debug/app-debug.apk`，7,194,684 bytes；SHA-256
+  `7e064e5c08e01f1c9a69f074336fccd0b1fc938f5da2795690a5d01d59659e70`。未安装/发布。
+- 静态检查：设置仅构建两个 Provider 分组；各分组独立查询当前 Vault 的记录并固定详情目标；
+  配置入口和持续状态沿用既有实现。中英文资源一致；行触控高度沿用 68dp；未改引擎或存储。
+- Mate 真机：未执行。需分别检查无记录、仅单服务记录、双服务记录、运行中、失败/取消、
+  未连接/重登录的展示和详情返回；中文/English、深浅色、最大字体与横竖屏均需人工检查。
+- 按 `review_checklist.md`：范围/设计追溯、Provider 归属及配置导航静态通过；Vault/保存/相机
+  行为不受本次改动影响；设备布局、辅助技术和实际点击仍待验证，不以构建替代。
