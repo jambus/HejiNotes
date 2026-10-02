@@ -17,6 +17,22 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
 - 历史条目记录该版本新增或修复的内容，不回填后续版本功能；同版本后续开发修订需明确标注。
   验证保留最终结果与待验收边界，详细过程链接到对应规格的验收记录。
 
+## 0.6.8 — 按钮按压与刷新状态反馈
+
+**状态**：非候选、未发布开发修订；Android `versionName = 0.6.8`、`versionCode = 20`。
+
+- FR-843：增强通用按钮按压/焦点反馈；手动刷新状态确认读取完成并显示读取时间，保留滚动位置。
+- 本包包含工作树已有同步稳定性修订；本项不改变同步逻辑。自动化/fresh APK 与 reviewer 证据见 `008/quickstart.md`；Mate 验收待执行。
+- 本轮最终集成：独立 49 suites / 389 tests，0 failures/errors/skips；fresh APK 7,214,292 bytes，原 reviewer 集成复查通过。SHA-256 `5c0f3816654b38c7567fef8418d4e889b20a052c6c9efbff406c962c3582f061`；签名与原版本一致。交付副本及证据见 `008/quickstart.md`，未安装/发布。
+
+## 0.6.7 — 同步读取重试与认证取消边界
+
+**状态**：非候选、未发布开发修订；Android `versionName = 0.6.7`、`versionCode = 19`。
+
+- T316 / D25–D27：安全 GET 有界退避；写入不重放；认证或取消停止后续请求，保留旧基线/搬运历史；下载失败释放连接。
+- 独立 0.6.7 完整 49 suites / 389 tests（0 failures/errors/skips）、fresh APK 与原 reviewer 复查通过。历史 APK 7,211,876 bytes，SHA-256 `352e22774d3ef8c032afbaca3fba9ffa99a2b3a6e8750977b88e26d24a7a7e66`；该输出路径随后被并行 0.6.8 构建覆盖，不能作为当前下载包。
+- 当前集成包验证证据统一见 `008/quickstart.md`；实际云盘/SAF/Mate 验收仍未完成，Vault 契约不变。
+
 ## 0.6.6 — 照片生命周期与保存恢复
 
 **状态**：开发修订，非候选、未发布；Android `versionName = 0.6.6`、`versionCode = 18`。

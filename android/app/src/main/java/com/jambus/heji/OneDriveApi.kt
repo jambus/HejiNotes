@@ -79,6 +79,7 @@ internal object OneDriveCopyPolicy {
         try {
             performUpload()
         } catch (failure: DriveApiException) {
+            if (failure.reason == SyncErrorReason.AUTH_REQUIRED) throw failure
             val fallback = findTarget()
             if (fallback != null && computeDigest(fallback).equals(sourceDigest, true)) {
                 return fallback
@@ -166,14 +167,24 @@ internal object OneDriveUrlPolicy {
 class OneDriveApi(
     private val tokenProvider: (forceRefresh: Boolean) -> String,
     private val cacheDirectory: File,
-    private val cancelled: AtomicBoolean = AtomicBoolean(false)
+    private val cancelled: AtomicBoolean = AtomicBoolean(false),
+    private val retry: SafeReadRetry = SafeReadRetry(),
+    private val connectionFactory: (String, String) -> HttpURLConnection = { _, url -> URL(url).openConnection() as HttpURLConnection }
 ) : DriveGateway {
     constructor(accessToken: String, cacheDirectory: File, cancelled: AtomicBoolean = AtomicBoolean(false)) :
         this({ accessToken }, cacheDirectory, cancelled)
 
-    @Volatile private var currentAccessToken: String = tokenProvider(false)
+    @Volatile private var currentAccessToken: String = run {
+        SafeReadRetry.checkCancelled(cancelled)
+        tokenProvider(false)
+    }
+
+    private var refreshed = false
 
     private fun refreshToken(): String {
+        SafeReadRetry.checkCancelled(cancelled)
+        if (refreshed) throw OneDriveReloginRequired()
+        refreshed = true
         val fresh = tokenProvider(true)
         currentAccessToken = fresh
         return fresh
@@ -270,34 +281,39 @@ class OneDriveApi(
     }
 
     override fun download(item: DriveItem): InputStream {
-        var graph = graphConnection("GET", "$GRAPH/me/drive/items/${path(item.id)}/content").apply {
-            instanceFollowRedirects = false
-        }
-        var code = graph.responseCode
-        if (code == 401 || code == 403) {
-            graph.disconnect()
-            refreshToken()
-            graph = graphConnection("GET", "$GRAPH/me/drive/items/${path(item.id)}/content").apply {
-                instanceFollowRedirects = false
+        val graph = openRead("$GRAPH/me/drive/items/${path(item.id)}/content", allowRedirect = true)
+        var handedOff = false
+        try {
+            if (graph.responseCode in 200..299) {
+                val stream = DisconnectingInputStream(BufferedInputStream(graph.inputStream), graph, cancelled)
+                handedOff = true
+                return stream
             }
-            code = graph.responseCode
-        }
-        if (code in 200..299) return DisconnectingInputStream(BufferedInputStream(graph.inputStream), graph, cancelled)
-        if (code in 300..399) {
-            val location = graph.getHeaderField("Location")
-            graph.disconnect()
-            val safe = OneDriveUrlPolicy.download(location)
-            val download = (URL(safe).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = CONNECT_TIMEOUT_MS
-                readTimeout = READ_TIMEOUT_MS
-                instanceFollowRedirects = false
+            val safe = OneDriveUrlPolicy.download(graph.getHeaderField("Location"))
+            val download = openRead(safe, authenticatedGraph = false)
+            try {
+                return DisconnectingInputStream(BufferedInputStream(download.inputStream), download, cancelled)
+            } catch (failure: Exception) { download.disconnect(); throw failure }
+        } finally { if (!handedOff) graph.disconnect() }
+    }
+
+    private fun openRead(url: String, authenticatedGraph: Boolean = true, allowRedirect: Boolean = false): HttpURLConnection {
+        return retry.execute(cancelled) { attempt ->
+            val connection = if (authenticatedGraph) graphConnection("GET", url) else rawConnection("GET", url)
+            try {
+                val code = connection.responseCode
+                if (SafeReadRetry.transient(code)) throw RetryableReadResponse(code, connection.getHeaderField("Retry-After"))
+                requireSuccess(connection, if (allowRedirect) (200..399).toSet() else (200..299).toSet(), authenticatedGraph)
+                connection
+            } catch (failure: Exception) {
+                connection.disconnect()
+                if (failure is OneDriveReloginRequired && authenticatedGraph && !refreshed && attempt < 2) {
+                    refreshToken()
+                    throw RetryReadAuthentication()
+                }
+                throw failure
             }
-            requireSuccess(download, (200..299).toSet(), authenticatedGraph = false)
-            return DisconnectingInputStream(BufferedInputStream(download.inputStream), download, cancelled)
         }
-        requireSuccess(graph, (200..299).toSet())
-        throw DriveApiException("OneDrive download failed")
     }
 
     private fun uploadSession(parentId: String, name: String, file: File) {
@@ -333,7 +349,7 @@ class OneDriveApi(
                 source.seek(offset)
                 val count = source.read(buffer, 0, minOf(buffer.size.toLong(), total - offset).toInt())
                 if (count <= 0) throw DriveApiException("OneDrive upload cache became unreadable")
-                val connection = (URL(uploadUrl).openConnection() as HttpURLConnection).apply {
+                val connection = rawConnection("PUT", uploadUrl).apply {
                     requestMethod = "PUT"
                     connectTimeout = CONNECT_TIMEOUT_MS
                     readTimeout = READ_TIMEOUT_MS
@@ -418,29 +434,26 @@ class OneDriveApi(
         }
 
     private fun <T> withGraphConnection(method: String, url: String, block: (HttpURLConnection) -> T): T {
-        var connection = graphConnection(method, OneDriveUrlPolicy.graph(url))
-        return try {
-            try {
-                block(connection)
-            } catch (ex: OneDriveReloginRequired) {
-                connection.disconnect()
-                refreshToken()
-                connection = graphConnection(method, OneDriveUrlPolicy.graph(url))
-                block(connection)
-            }
-        } finally {
-            connection.disconnect()
-        }
+        val safe = OneDriveUrlPolicy.graph(url)
+        val connection = if (method == "GET") openRead(safe) else graphConnection(method, safe)
+        return try { block(connection) } finally { connection.disconnect() }
     }
 
-    private fun graphConnection(method: String, url: String): HttpURLConnection =
-        (URL(OneDriveUrlPolicy.graph(url)).openConnection() as HttpURLConnection).apply {
+    private fun rawConnection(method: String, url: String): HttpURLConnection {
+        SafeReadRetry.checkCancelled(cancelled)
+        val connection = connectionFactory(method, url)
+        return try { connection.apply {
             requestMethod = method
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
+            instanceFollowRedirects = false
+        } } catch (failure: Exception) { connection.disconnect(); throw failure }
+    }
+
+    private fun graphConnection(method: String, url: String): HttpURLConnection =
+        rawConnection(method, OneDriveUrlPolicy.graph(url)).apply {
             setRequestProperty("Authorization", "Bearer $currentAccessToken")
             setRequestProperty("Accept", "application/json")
-            instanceFollowRedirects = false
         }
 
     private fun sanitizeUrl(url: URL): String = OneDriveUrlPolicy.sanitizeUrl(url)
@@ -448,8 +461,9 @@ class OneDriveApi(
     private fun requireSuccess(connection: HttpURLConnection, expected: Set<Int>, authenticatedGraph: Boolean = true) {
         val code = connection.responseCode
         if (code !in expected) {
+            runCatching { connection.errorStream?.close() }
             Log.e("OneDriveApi", "HTTP $code for ${connection.requestMethod} ${sanitizeUrl(connection.url)}")
-            if (authenticatedGraph && (code == 401 || code == 403)) throw OneDriveReloginRequired()
+            if (authenticatedGraph && code == 401) throw OneDriveReloginRequired()
             throw DriveApiException(when (code) {
                 401, 403 -> "OneDrive transfer session is no longer available"
                 404 -> "The selected OneDrive item is no longer available"

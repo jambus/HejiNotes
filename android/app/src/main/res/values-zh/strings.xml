@@ -95,4 +95,6 @@
     <string name="photo_decode_failed">无法处理照片，请重新拍摄</string>
     <string name="photo_interrupted">照片处理已中断，之前的写入可能已完成。请先检查 Vault 已保存笔记再重新拍摄；应用不会重放之前的插入。</string>
     <string name="photo_check_saved_note">检查 Vault 已保存笔记</string>
+    <string name="sync_status_refreshed">状态已刷新</string>
+    <string name="sync_status_refreshed_at">最近读取状态：%1$s</string>
 </resources>

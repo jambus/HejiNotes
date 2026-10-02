@@ -179,3 +179,17 @@ JUnit 覆盖横竖屏、多密度、长宽比与极小/零尺寸；运行 Androi
 2026-10-02 独立复核修订：照片回滚只有严格读取证明本次固定身份/哈希输出已删除或缺失，且事务 marker 已删除或缺失后才结束清理屏障。Provider false/异常、读取或身份歧义、替换文件、marker 残留均转入保守恢复，不可普通重试。此验证身份仅在进程内保存，marker/Vault 格式不变。预提交缓存缺失/不可解码需明确中断说明。失败正文恢复的 persisted revision 仅属于该笔记，不能沿用其他笔记的保存计数。
 
 `savePhotoPair` nullable 结果不能区分无写入与部分写入，本次在所有 null 结果上保守保持进程内恢复屏障；既有部分创建失败内部清理尚不作为已验证回滚证据，未改 marker 格式或扩大启动恢复 API。
+
+## D25–D27 实施边界
+
+Sol 只读评审确认 T316 的读取重试缺口及认证/取消/连接清理缺陷，再由单一 Sol 开发者修改
+adapter、引擎和后台服务。独立 tester 执行完整单测/fresh APK，原 reviewer 最终复查。
+具体 retry 策略由 `003/spec.md` 管理；本规格负责终止语义和原基线保护回归。
+真实 Google/OneDrive、SAF、升级/UI 验收保留 T848，与本轮 JVM 证据分开记录。
+
+## FR-843 实现计划
+
+统一 rippleBackground 的 enabled pressed/focused 底色与裁切 mask，修复自定义操作覆盖背景。
+手动刷新复用 refreshVisibleSyncPage，记录页面内最近读取时间并以本地化轻提示确认；
+保持后台更新静默，离开详情或切换 Provider 后清除页面反馈。执行 Android 全套单测/fresh APK，
+由原只读 reviewer 复核；Mate 视觉、TalkBack、最大字体和重复点击另记录。

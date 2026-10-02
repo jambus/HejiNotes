@@ -95,4 +95,6 @@
     <string name="photo_decode_failed">Could not process this photo. Take it again.</string>
     <string name="photo_interrupted">Photo processing was interrupted. The earlier write may have completed. Check the saved Vault note before taking another photo; the previous insertion will not be replayed.</string>
     <string name="photo_check_saved_note">Check saved Vault note</string>
+    <string name="sync_status_refreshed">Status refreshed</string>
+    <string name="sync_status_refreshed_at">Status last read: %1$s</string>
 </resources>

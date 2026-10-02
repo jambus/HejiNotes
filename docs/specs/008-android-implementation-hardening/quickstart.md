@@ -194,3 +194,48 @@ cd android
   位图资源、实际 SAF 回滚、Mate APK 与 HAP 拍照→重启→图片/相对链接检查仍待执行。
 - 安全限制：不能确认写入或清理时禁止普通重试，提示重启应用后重新打开 Vault 核查。
   `recoverVault()` 返回成功不被当作所有照片 marker 均已解决的证明；持久化 marker 格式未变化。
+
+## 0.6.7（19）· T316 / D25–D27 验证
+
+开发者受影响 7 suites / 69 tests、独立 0.6.7 完整 49 suites / 389 tests 与原 reviewer 复查通过。
+0.6.7 输出随后被并行 UI 构建覆盖；当前集成包证据见下节。
+新增测试针对两个 adapter 的读取尝试/等待预算、401/403、连接释放、取消、无写入/流重放，
+以及引擎认证终止和取消不推进旧基线；这些仍是 JVM/模拟 HTTP 证据。
+真实账号、SAF Provider、弱网、Mate UI 和设备路径由 T317/T329/T330/T848 继续验收。
+
+## FR-843 · 按钮与刷新反馈（0.6.8 / 20）
+
+- 自动化（2026-10-02）：本机无 DevEco JBR，使用已有 OpenJDK 17 和 Android SDK；在 `android/`
+  执行 `./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon`，最终修订 13s 成功，
+  36 tasks / 8 executed；49 suites / 389 tests，0 failures/errors/skips。保留已有 AGP/SDK 与 deprecated API 警告。
+- fresh APK：`android/app/build/outputs/apk/debug/app-debug.apk`，7,214,292 bytes；SHA-256
+  `5c0f3816654b38c7567fef8418d4e889b20a052c6c9efbff406c962c3582f061`。本包包含已有同步工作树修订，未安装/未发布。
+- 原 reviewer 在颜色修正后最终复查通过，无待修复发现。`git diff --check` 通过。
+  按设计清单静态确认本地化、Provider/滚动保持、后台更新静默、禁用态与无新增延迟页面重建；
+  主/次按钮日夜文字对比按 normal/pressed/波纹叠加值核算，最低 5.06:1。
+- Mate 未执行：按 T859 验证深浅色按压/焦点、禁用状态、中文/English、TalkBack、最大字体、
+  重复刷新与滚动保持；裁剪模式仅按钮背景呈现改变，实际拍照插入/重启/相对链接仍待设备证据。
+  不以单测或构建代替设备证据；本次不修改 HAP，不声称两端真机通过。
+
+## 0.6.8（20）· 本轮最终集成验证
+
+- 同步 T316 / D25–D27 已通过原 reviewer 复查；并行 FR-843 UI 改动的集成只读评审也通过。
+  新 UI 的点击/刷新保持原同步与取消处理路径，渲染/辅助技术及 Mate 行为仍待实测。
+- 独立 tester 使用已有 JDK 17（DevEco JBR 不可用）及 Android SDK，在 android/ 执行
+  `./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon --rerun-tasks`，
+  24s 成功，36 tasks 全部执行。49 suites / 389 tests，0 failures/errors/skips。
+  `verify-vault-contract.sh`、`git diff --check` 与公共证书签名校验通过。
+- 构建前后 129 个 Android 源码/测试/资源/构建文件指纹完全一致，聚合 SHA-256：
+  `570468d5b2d7ecea0aa17b8ebf7f81c5e20c5d79d572ef652af27321ac6f4ff7`。
+- 最终包为 com.jambus.heji、0.6.8（20）、7,214,292 bytes；生成于 2026-10-02 21:01:43 +0800。
+  SHA-256：`5c0f3816654b38c7567fef8418d4e889b20a052c6c9efbff406c962c3582f061`。
+  已保存独立交付副本 `/private/tmp/heji-sync-retry-delivery-20261002/HejiNotes-current-debug.apk`，
+  副本哈希与 fresh APK 一致；主协调者另核对副本与 XML。
+- 公共证书 SHA-256 与原版本一致：
+  `b3be289894592585b98c0ed9076f98612e7cddb7c7574c6343ce0b400d018e20`；未读取签名密钥。
+- 读取预算按端点建立阶段计；OneDrive Graph 与显式重定向下载各最多三次/30 秒等待，
+  整次下载最多六次请求/60 秒重试等待。消费者读取及原有上传会话进度核验不纳入新重试机制。
+- 自动化限制：累计多次 Retry-After 的精确边界、服务偏好联动、初始 token/刷新前取消、
+  带既有错误和完成搬运的终止组合、每种写入失败组合，部分仅有源码复核。
+  没有把这些静态结论写作额外测试通过；本轮没有真实云盘、SAF 或 Mate 覆盖。
+  T317/T329/T330/T848 保持开放，当前包未安装或发布，仍为非候选开发版。

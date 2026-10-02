@@ -83,3 +83,8 @@ ANDROID_HOME="$HOME/Library/Android/sdk" \
 ## 2026-10-02 · 生命周期开发修订
 
 0.6.6（18）独立全套 374 项单测/fresh APK 和原 reviewer 复查通过，最终自动化、包和证书证据统一见 `../008-android-implementation-hardening/quickstart.md`。本包未安装；仍须记录处理/附件写入/提交中旋转、缺缓存终态交接、取消与回滚失败、未知提交禁重试、跨笔记失败保存重试、重启及图片/相对链接的 Mate/实际 SAF 结果。JVM 测试不替代 Activity 或设备证据。
+
+## 0.6.7（19）· 同步稳定性修订
+
+当前非候选开发包纳入 `003` T316 与 `008` D25–D27。最终自动化/APK 证据统一见
+`../008-android-implementation-hardening/quickstart.md`；本包安装、升级、实际云盘/SAF/Mate 验收仍待执行。

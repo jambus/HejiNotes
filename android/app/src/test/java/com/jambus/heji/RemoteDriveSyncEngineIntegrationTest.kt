@@ -955,8 +955,48 @@ class RemoteDriveSyncEngineIntegrationTest {
         assertNull("Baseline must remain uncommitted upon cancellation", baselineStore.currentBaseline)
     }
 
+    @Test fun `initial scan cancellation reports cancelled without failure baseline or mutation`() {
+        val vault = FakeSyncVaultAccessor()
+        val gateway = FakeDriveGateway().apply { throwOnScan = SyncTransferCancelled() }
+        val store = FakeDriveBaselineStore()
+        val outcome = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(outcome.cancelled)
+        assertTrue(outcome.errors.isEmpty())
+        assertNull(store.currentBaseline)
+        assertTrue(gateway.eventOrder.isEmpty())
+    }
+
+    @Test fun `Google auth at final scan preserves counts and previous baseline`() {
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "original") }
+        val gateway = FakeDriveGateway("google_drive", "Google Drive")
+        gateway.addItem("item-doc", "root-1", "doc.md", "original")
+        val old = baselineFor("original", verified = true)
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        var scans = 0
+        gateway.onScan = { if (++scans == 2) throw DriveApiException("expired", SyncErrorReason.AUTH_REQUIRED) }
+        val outcome = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertEquals(1, outcome.unchanged)
+        assertEquals(SyncErrorReason.AUTH_REQUIRED, outcome.errorDetails.single().reason)
+        assertEquals(old, store.currentBaseline)
+    }
+
+    @Test fun `Google item authentication stops subsequent file requests`() {
+        val vault = FakeSyncVaultAccessor()
+        val gateway = FakeDriveGateway("google_drive", "Google Drive")
+        gateway.addItem("a", "root-1", "a.md", "a")
+        gateway.addItem("b", "root-1", "b.md", "b")
+        var requests = 0
+        gateway.onRevision = { if (it != "root-1") { requests++; throw DriveApiException("expired", SyncErrorReason.AUTH_REQUIRED) } }
+        val store = FakeDriveBaselineStore()
+        val outcome = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertEquals(SyncErrorReason.AUTH_REQUIRED, outcome.errorDetails.single().reason)
+        assertEquals(1, requests)
+        assertNull(store.currentBaseline)
+        assertTrue(gateway.trashedIds.isEmpty())
+    }
+
     @Test
-    fun `relogin required exception is rethrown directly out of sync engine`() {
+    fun `relogin required is a terminal typed sync result`() {
         val vaultAccessor = FakeSyncVaultAccessor()
         vaultAccessor.setFile("doc.md", "doc-content")
 
@@ -971,12 +1011,11 @@ class RemoteDriveSyncEngineIntegrationTest {
             accountId = "acc-1"
         )
 
-        try {
-            engine.sync(root)
-            fail("RemoteDriveSyncEngine must rethrow OneDriveReloginRequired")
-        } catch (ex: OneDriveReloginRequired) {
-            assertEquals("Microsoft sign-in interaction is required", ex.message)
-        }
+        val result = engine.sync(root)
+        assertFalse(result.isSuccessful)
+        assertFalse(result.cancelled)
+        assertEquals(SyncErrorReason.AUTH_REQUIRED, result.errorDetails.single().reason)
+
     }
 
     @Test

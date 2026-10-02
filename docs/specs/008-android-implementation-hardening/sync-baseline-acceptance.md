@@ -119,3 +119,8 @@ ANDROID_HOME=/Users/jambus/Library/Android/sdk \
   没有触发 Google/OneDrive 真实同步。本次没有自动安装 APK。
 
 未自动安装本次包或触发个人 Vault/真实云盘同步。真机验收仍按 V14–V16 使用专用测试 Vault。
+
+## 0.6.7（19）· 重试和终止修订
+
+T316 / D25–D27 的最终 JVM/构建/复核证据统一见本规格 quickstart.md。
+本轮不改变基线格式、条件删除或 MoveBundle 契约；实际服务、SAF 和设备验收仍待完成。

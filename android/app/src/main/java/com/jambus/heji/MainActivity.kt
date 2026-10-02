@@ -350,6 +350,7 @@ class MainActivity : Activity() {
 
     private var stopObservingSync: (() -> Unit)? = null
     private var syncDetailsProvider: String? = null
+    private var syncDetailsRefreshedAt: Long? = null
     private var syncConfirmationBaseline: SyncTaskSnapshot? = null
     private val refreshSyncUi = Runnable {
         if (stopObservingSync != null && !isFinishing && !isDestroyed) refreshVisibleSyncPage()
@@ -1941,6 +1942,9 @@ class MainActivity : Activity() {
     }
 
     private fun showSyncDetails(providerId: String? = null) {
+        if (screen != Screen.DRIVE_DETAILS || syncDetailsProvider != providerId) {
+            syncDetailsRefreshedAt = null
+        }
         syncDetailsProvider = providerId
         screen = Screen.DRIVE_DETAILS
         val root = pageRoot(COLOR_BACKGROUND)
@@ -2001,7 +2005,20 @@ class MainActivity : Activity() {
                 showSyncDetails(syncDetailsProvider)
             }, matchWrap().apply { bottomMargin = dp(8) })
         }
-        content.addView(action("刷新状态", false) { showSyncDetails(syncDetailsProvider) }, matchWrap().apply { bottomMargin = dp(8) })
+        content.addView(action("刷新状态", false) {
+            syncDetailsRefreshedAt = System.currentTimeMillis()
+            refreshVisibleSyncPage()
+            toast(getString(R.string.sync_status_refreshed))
+        }, matchWrap().apply { bottomMargin = dp(8) })
+        syncDetailsRefreshedAt?.let { refreshedAt ->
+            content.addView(TextView(this).apply {
+                text = getString(R.string.sync_status_refreshed_at, formatSyncTime(refreshedAt))
+                textSize = 14f
+                setTextColor(COLOR_SECONDARY_TEXT)
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+                setPadding(0, 0, 0, dp(12))
+            }, matchWrap())
+        }
         content.addView(action("返回设置", true) { showSettings() }, matchWrap())
         scroll.addView(content, LinearLayout.LayoutParams(-1, -2))
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -3844,7 +3861,7 @@ class MainActivity : Activity() {
             action.isSelected = selected
             action.contentDescription = if (selected) "${action.text}，已选中" else action.text
             action.setTextColor(if (selected) COLOR_ON_ACCENT else COLOR_PRIMARY_TEXT)
-            action.background = rounded(if (selected) COLOR_ACCENT else COLOR_ROW, dp(12))
+            action.background = rippleBackground(if (selected) COLOR_ACCENT else COLOR_ROW, dp(12))
         }
     }
 
@@ -4469,7 +4486,7 @@ class MainActivity : Activity() {
         minHeight = dp(44)
         setPadding(dp(4), dp(8), dp(4), dp(8))
         setTextColor(Color.WHITE)
-        background = rounded(color, 0)
+        background = rippleBackground(color, 0, Color.BLACK)
         isClickable = true
         isFocusable = true
         contentDescription = UiText.label(this@MainActivity, accessibilityLabel)
@@ -4810,14 +4827,33 @@ class MainActivity : Activity() {
         cornerRadius = radius.toFloat()
     }
 
-    private fun rippleBackground(color: Int, radius: Int): android.graphics.drawable.RippleDrawable =
-        android.graphics.drawable.RippleDrawable(
-            android.content.res.ColorStateList.valueOf(
-                if (isNightTheme()) COLOR_ACCENT else Color.argb(42, 47, 107, 79)
-            ),
-            rounded(color, radius),
-            null
+    private fun rippleBackground(
+        color: Int,
+        radius: Int,
+        feedbackColor: Int = if (color == COLOR_ACCENT) {
+            if (isNightTheme()) Color.WHITE else Color.BLACK
+        } else COLOR_PRIMARY_TEXT
+    ): android.graphics.drawable.RippleDrawable {
+        // A static state fill acknowledges touch/focus even when system animations are reduced.
+        val stateColor = Color.rgb(
+            (Color.red(color) * 0.82f + Color.red(feedbackColor) * 0.18f).toInt(),
+            (Color.green(color) * 0.82f + Color.green(feedbackColor) * 0.18f).toInt(),
+            (Color.blue(color) * 0.82f + Color.blue(feedbackColor) * 0.18f).toInt()
         )
+        val states = android.graphics.drawable.StateListDrawable().apply {
+            addState(intArrayOf(-android.R.attr.state_enabled), rounded(color, radius))
+            addState(intArrayOf(android.R.attr.state_pressed), rounded(stateColor, radius))
+            addState(intArrayOf(android.R.attr.state_focused), rounded(stateColor, radius))
+            addState(intArrayOf(), rounded(color, radius))
+        }
+        return android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(Color.argb(
+                32, Color.red(feedbackColor), Color.green(feedbackColor), Color.blue(feedbackColor)
+            )),
+            states,
+            rounded(Color.WHITE, radius)
+        )
+    }
 
     private fun colorBlock(color: Int): GradientDrawable = GradientDrawable().apply { setColor(color) }
 

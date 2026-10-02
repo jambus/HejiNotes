@@ -227,7 +227,7 @@ class RemoteDriveSyncEngine(
             // Initial proof must never alias working caches that move reconciliation refreshes.
             folderIdentities.putAll(remoteFolders)
         } catch (failure: Exception) {
-            if (failure is OneDriveReloginRequired) throw failure
+            if (failure is SyncTransferCancelled || coordinator.isCancelled) return result(0, 0, 0, 0, errors, true)
             recordFailure(failure)
             return result(0, 0, 0, 0, errors, false)
         }
@@ -242,9 +242,9 @@ class RemoteDriveSyncEngine(
         val baseline = try {
             validateBaseline(storedBaseline, remoteFiles)
         } catch (failure: Exception) {
-            if (failure is OneDriveReloginRequired) throw failure
+            if (failure is SyncTransferCancelled || coordinator.isCancelled) return result(0, 0, 0, 0, errors, true)
             recordFailure(failure)
-            return result(0, 0, 0, 0, errors, coordinator.isCancelled)
+            return result(0, 0, 0, 0, errors, false)
         }
         if (coordinator.isCancelled) return SyncRunResult(0, 0, 0, 0, emptyList(), true)
 
@@ -406,8 +406,9 @@ class RemoteDriveSyncEngine(
                 }
             } catch (failure: Exception) {
                 Log.e("RemoteDriveSync", "File sync failed: ${failure.javaClass.simpleName}")
-                if (failure is OneDriveReloginRequired) throw failure
+                if (failure is SyncTransferCancelled || coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
                 recordFailure(failure, path)
+                if (SyncFailurePolicy.fromException(failure).reason == SyncErrorReason.AUTH_REQUIRED) return result(uploaded, downloaded, unchanged, conflicts, errors, false, deleted)
             }
             completed++
             report(completed, total, "已比较 $completed / $total")
@@ -426,10 +427,11 @@ class RemoteDriveSyncEngine(
                 }
             } catch (failure: Exception) {
                 Log.e("RemoteDriveSync", "Apply committed move failed: ${failure.javaClass.simpleName}")
-                if (failure is OneDriveReloginRequired) throw failure
+                if (failure is SyncTransferCancelled || coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
                 val representativePath = change.sourceToTarget.keys.firstOrNull { it.endsWith(".md", true) }
                     ?: change.sourceToTarget.keys.firstOrNull().orEmpty()
                 recordFailure(failure, representativePath)
+                if (SyncFailurePolicy.fromException(failure).reason == SyncErrorReason.AUTH_REQUIRED) return result(uploaded, downloaded, unchanged, conflicts, errors, false, deleted)
             }
         }
         if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
@@ -485,8 +487,9 @@ class RemoteDriveSyncEngine(
                 }
             } catch (failure: Exception) {
                 Log.e("RemoteDriveSync", "Remote item processing failed: ${failure.javaClass.simpleName}")
-                if (failure is OneDriveReloginRequired) throw failure
+                if (failure is SyncTransferCancelled || coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
                 recordFailure(failure, path)
+                if (SyncFailurePolicy.fromException(failure).reason == SyncErrorReason.AUTH_REQUIRED) return result(uploaded, downloaded, unchanged, conflicts, errors, false, deleted)
             }
             completed++
             report(completed, total, "已比较 $completed / $total")
@@ -498,7 +501,11 @@ class RemoteDriveSyncEngine(
             val baselineSaved = try {
                 saveBaseline(root, baseline)
             } catch (failure: Exception) {
-                if (failure is OneDriveReloginRequired) throw failure
+                if (failure is SyncTransferCancelled || coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
+                if (SyncFailurePolicy.fromException(failure).reason == SyncErrorReason.AUTH_REQUIRED) {
+                    recordFailure(failure)
+                    return result(uploaded, downloaded, unchanged, conflicts, errors, false, deleted)
+                }
                 BaselineSaveResult.FAILED
             }
             if (baselineSaved == BaselineSaveResult.CANCELLED) {

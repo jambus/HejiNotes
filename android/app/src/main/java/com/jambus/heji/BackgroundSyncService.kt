@@ -253,13 +253,19 @@ class BackgroundSyncService : Service() {
                 LocalDriveSyncBaselineStore(this, ONEDRIVE_PROVIDER),
                 coordinator
             ) { progress -> stateStore.updateProgress(progress)?.let(::showOngoingNotification) }
-                .sync(request.root)
+                .sync(request.root).also { outcome ->
+                    if (outcome.errorDetails.any { it.reason == SyncErrorReason.AUTH_REQUIRED }) {
+                        preferences.markReloginRequired(request.vaultId)
+                    }
+                }
         }
     } catch (e: OneDriveReloginRequired) {
         Log.w(TAG, "OneDrive sync requires re-login")
         OneDriveSyncPreferences(this).markReloginRequired(request.vaultId)
         SyncRunResult(0, 0, 0, 0, listOf("AUTH_REQUIRED"), false,
             errorDetails = listOf(SyncFailurePolicy.fromException(e)))
+    } catch (e: SyncTransferCancelled) {
+        SyncRunResult(0, 0, 0, 0, emptyList(), true)
     } catch (e: Exception) {
         Log.e(TAG, "OneDrive sync failed: ${e.javaClass.simpleName}")
         SyncRunResult(0, 0, 0, 0, listOf("SYNC_FAILED"), false,
@@ -281,7 +287,7 @@ class BackgroundSyncService : Service() {
         } else {
             GoogleDriveSyncService(
                 VaultRepository(this, android.net.Uri.parse(request.vaultId)),
-                GoogleDriveApi(auth.accessToken(account)),
+                GoogleDriveApi(auth.accessToken(account), cancelled = coordinator.streamSignal),
                 request.vaultId,
                 request.accountId,
                 LocalChangeJournal(this),
@@ -291,6 +297,8 @@ class BackgroundSyncService : Service() {
                 stateStore.updateProgress(progress)?.let(::showOngoingNotification)
             }.sync(request.root)
         }
+    } catch (e: SyncTransferCancelled) {
+        DriveSyncResult(0, 0, 0, 0, emptyList(), true)
     } catch (e: Exception) {
         Log.e(TAG, "Google Drive sync failed: ${e.javaClass.simpleName}")
         DriveSyncResult(0, 0, 0, 0, listOf("SYNC_FAILED"), false,

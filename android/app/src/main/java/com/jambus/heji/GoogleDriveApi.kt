@@ -20,7 +20,7 @@ data class DriveItem(
 )
 data class DriveRevision(val item: DriveItem, val etag: String?)
 
-class DriveApiException(message: String, val reason: SyncErrorReason = SyncErrorReason.UNKNOWN) : Exception(message)
+open class DriveApiException(message: String, val reason: SyncErrorReason = SyncErrorReason.UNKNOWN) : Exception(message)
 
 /** Narrow Drive REST adapter. It deliberately keeps credentials and network URLs out of logs. */
 interface DriveGateway {
@@ -42,6 +42,8 @@ interface DriveGateway {
 
 class GoogleDriveApi(
     private val accessToken: String,
+    private val cancelled: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
+    private val retry: SafeReadRetry = SafeReadRetry(),
     private val connectionFactory: (String, String) -> HttpURLConnection = { _, url -> URL(url).openConnection() as HttpURLConnection }
 ) : DriveGateway {
     override fun listChildren(parentId: String): List<DriveItem> {
@@ -146,14 +148,23 @@ class GoogleDriveApi(
     }
 
     override fun download(item: DriveItem): InputStream {
-        val connection = open("GET", "https://www.googleapis.com/drive/v3/files/${encode(item.id)}?alt=media")
+        val connection = openRead("https://www.googleapis.com/drive/v3/files/${encode(item.id)}?alt=media")
         try {
-            requireSuccess(connection)
-            return DisconnectingInputStream(BufferedInputStream(connection.inputStream), connection)
+            return DisconnectingInputStream(BufferedInputStream(connection.inputStream), connection, cancelled)
         } catch (failure: Exception) {
             connection.disconnect()
             throw failure
         }
+    }
+
+    private fun openRead(url: String): HttpURLConnection = retry.execute(cancelled) {
+        val connection = open("GET", url)
+        try {
+            val code = connection.responseCode
+            if (SafeReadRetry.transient(code)) throw RetryableReadResponse(code, connection.getHeaderField("Retry-After"))
+            requireSuccess(connection)
+            connection
+        } catch (failure: Exception) { connection.disconnect(); throw failure }
     }
 
     private fun request(method: String, url: String, body: String? = null, expectedEtag: String? = null): JSONObject =
@@ -197,23 +208,26 @@ class GoogleDriveApi(
     }
 
     private fun <T> withConnection(method: String, url: String, block: (HttpURLConnection) -> T): T {
-        val connection = open(method, url)
+        val connection = if (method == "GET") openRead(url) else open(method, url)
         return try { block(connection) } finally { connection.disconnect() }
     }
 
-    private fun open(method: String, url: String): HttpURLConnection =
-        connectionFactory(method, url).apply {
+    private fun open(method: String, url: String): HttpURLConnection {
+        SafeReadRetry.checkCancelled(cancelled)
+        val connection = connectionFactory(method, url)
+        return try { connection.apply {
             requestMethod = method
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             setRequestProperty("Authorization", "Bearer $accessToken")
             setRequestProperty("Accept", "application/json")
-        }
+        } } catch (failure: Exception) { connection.disconnect(); throw failure }
+    }
 
     private fun requireSuccess(connection: HttpURLConnection) {
         val code = connection.responseCode
         if (code !in 200..299) {
-            connection.errorStream?.close()
+            runCatching { connection.errorStream?.close() }
             throw DriveApiException(
                 when (code) {
                     401, 403 -> "Google Drive authorization is no longer available"
@@ -228,8 +242,10 @@ class GoogleDriveApi(
     private fun copy(input: InputStream, output: java.io.OutputStream) {
         val buffer = ByteArray(32 * 1024)
         while (true) {
+            SafeReadRetry.checkCancelled(cancelled)
             val count = input.read(buffer)
             if (count < 0) return
+            SafeReadRetry.checkCancelled(cancelled)
             output.write(buffer, 0, count)
         }
     }
@@ -238,10 +254,11 @@ class GoogleDriveApi(
 
     private class DisconnectingInputStream(
         private val delegate: InputStream,
-        private val connection: HttpURLConnection
+        private val connection: HttpURLConnection,
+        private val cancelled: java.util.concurrent.atomic.AtomicBoolean
     ) : InputStream() {
-        override fun read(): Int = delegate.read()
-        override fun read(buffer: ByteArray, offset: Int, length: Int): Int = delegate.read(buffer, offset, length)
+        override fun read(): Int { SafeReadRetry.checkCancelled(cancelled); return delegate.read() }
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int { SafeReadRetry.checkCancelled(cancelled); return delegate.read(buffer, offset, length) }
         override fun close() {
             try { delegate.close() } finally { connection.disconnect() }
         }
