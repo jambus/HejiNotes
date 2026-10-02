@@ -1,5 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="sync_reason_precondition">The cloud service did not provide a safe condition for changing this item. The operation was stopped.</string>
+    <string name="sync_reason_busy">Another sync is running. Wait for it to finish before starting this sync.</string>
+    <string name="sync_error_reason_detail">%1$s: %2$s</string>
+    <string name="sync_other_vault_running">Another Vault is syncing. Return to that Vault to view or cancel it, or wait before starting another sync.</string>
+    <string name="sync_reason_unknown">Could not complete this operation. Retry sync.</string>
+    <string name="sync_reason_auth">Authorization expired. Sign in again.</string>
+    <string name="sync_reason_permission">Access was denied. Check cloud or Vault permissions.</string>
+    <string name="sync_reason_network">Network transfer failed. Check the connection and retry.</string>
+    <string name="sync_reason_rate">The cloud service is busy. Retry later.</string>
+    <string name="sync_reason_missing">The cloud item is unavailable. Check the selected folder.</string>
+    <string name="sync_reason_remote_changed">Cloud content changed during sync. Retry to compare again.</string>
+    <string name="sync_reason_path">Duplicate names or an ambiguous path. Resolve the names before retrying.</string>
+    <string name="sync_reason_read">Could not verify local content. Check Vault access.</string>
+    <string name="sync_reason_write">Could not write to the Vault. Check access and free space.</string>
+    <string name="sync_reason_content">Downloaded content did not pass verification. Copies were preserved.</string>
+    <string name="sync_reason_local_changed">Local content changed during sync. It was preserved; retry.</string>
+    <string name="sync_reason_baseline">Final comparison was incomplete. The previous baseline was retained; retry.</string>
+    <string name="sync_reason_uncertain">The download commit could not be confirmed. Keep the Vault and retained .markbook-sync- copies for recovery.</string>
     <string name="app_name">Heji Notes</string>
     <string name="brand_mark">H</string>
     <string name="language">Language</string>
@@ -64,6 +82,7 @@
     <string name="onedrive_sync_selection_missing">No OneDrive Vault is selected</string>
     <string name="onedrive_sync_tuple_changed">The current Vault, Microsoft account, or OneDrive folder changed. Sign in or confirm the selection again.</string>
     <string name="onedrive_sync_connection_failed">Could not connect to OneDrive. Check the network or sign in again.</string>
+    <string name="sync_provider_details_title">%1$s · Sync details</string>
     <string name="sync_details">%1$s: %2$s\nStarted: %3$s\n%4$s%5$s\n\nProgress %6$d / %7$d\nUploaded %8$d · Downloaded %9$d · Unchanged %10$d · Conflicts %11$d.\n\nYou can continue editing local files during sync; the next sync compares changes saved afterward.</string>
     <string name="sync_finished_prefix">Finished: %1$s\n</string>
     <string name="sync_errors_heading">Items needing attention:</string>

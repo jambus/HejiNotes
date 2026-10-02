@@ -20,7 +20,7 @@ data class DriveItem(
 )
 data class DriveRevision(val item: DriveItem, val etag: String?)
 
-class DriveApiException(message: String) : Exception(message)
+class DriveApiException(message: String, val reason: SyncErrorReason = SyncErrorReason.UNKNOWN) : Exception(message)
 
 /** Narrow Drive REST adapter. It deliberately keeps credentials and network URLs out of logs. */
 interface DriveGateway {
@@ -40,7 +40,10 @@ interface DriveGateway {
     fun download(item: DriveItem): InputStream
 }
 
-class GoogleDriveApi(private val accessToken: String) : DriveGateway {
+class GoogleDriveApi(
+    private val accessToken: String,
+    private val connectionFactory: (String, String) -> HttpURLConnection = { _, url -> URL(url).openConnection() as HttpURLConnection }
+) : DriveGateway {
     override fun listChildren(parentId: String): List<DriveItem> {
         val result = mutableListOf<DriveItem>()
         var pageToken: String? = null
@@ -103,7 +106,8 @@ class GoogleDriveApi(private val accessToken: String) : DriveGateway {
     }
 
     override fun replace(id: String, expectedEtag: String?, mimeType: String, input: InputStream) {
-        uploadMultipart("PATCH", "https://www.googleapis.com/upload/drive/v3/files/${encode(id)}?uploadType=multipart", null, mimeType, input, expectedEtag)
+        val precondition = DriveMutationPrecondition.requireStrong(expectedEtag)
+        uploadMultipart("PATCH", "https://www.googleapis.com/upload/drive/v3/files/${encode(id)}?uploadType=multipart", null, mimeType, input, precondition)
     }
 
     override fun copy(id: String, parentId: String, name: String): DriveItem {
@@ -126,8 +130,9 @@ class GoogleDriveApi(private val accessToken: String) : DriveGateway {
 
     /** Recoverable removal used only by an explicit, verified note-bundle move. */
     override fun trash(id: String, expectedEtag: String?) {
+        val precondition = DriveMutationPrecondition.requireStrong(expectedEtag)
         val metadata = JSONObject().put("trashed", true)
-        request("PATCH", "https://www.googleapis.com/drive/v3/files/${encode(id)}", metadata.toString(), expectedEtag)
+        request("PATCH", "https://www.googleapis.com/drive/v3/files/${encode(id)}", metadata.toString(), precondition)
     }
 
     override fun refresh(id: String): DriveItem {
@@ -197,7 +202,7 @@ class GoogleDriveApi(private val accessToken: String) : DriveGateway {
     }
 
     private fun open(method: String, url: String): HttpURLConnection =
-        (URL(url).openConnection() as HttpURLConnection).apply {
+        connectionFactory(method, url).apply {
             requestMethod = method
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
@@ -215,7 +220,7 @@ class GoogleDriveApi(private val accessToken: String) : DriveGateway {
                     404 -> "The selected Google Drive folder is no longer available"
                     429 -> "Google Drive is busy; try again later"
                     else -> "Google Drive request failed ($code)"
-                }
+                }, SyncFailurePolicy.http(code)
             )
         }
     }

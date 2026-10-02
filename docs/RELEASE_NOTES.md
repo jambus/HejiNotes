@@ -15,10 +15,78 @@ Android APK 与 HarmonyOS HAP 分别维护安装包版本；两端共享 Vault �
   构建记录后，才能标记为“已发布”。
 - 尚未完成的优化不写入“已实现功能”，统一关联到对应编号规格的未完成任务。
 
+## 0.6.4 — 设置页同步详情分组
+
+**状态**：开发调试版，本次单测/fresh APK 通过，待 Mate UI 验收（非候选，未发布）
+**Android 安装包版本**：`versionName = 0.6.4`，`versionCode = 16`
+
+- GitHub #2 / `008` FR-838：Google Drive 与 OneDrive 的配置和详情各自放入连续分组，
+  移除额外通用详情入口。无记录时只显示配置；已有历史的服务仍可独立查看结果。
+- 仅改变 Android UI，沿用现有 Provider/Vault 查询、配置和同步行为；保留既有同步加固修改。
+- 本次自动化结果及真机布局/导航证据在 `008/quickstart.md` 单独记录。
+- 2026-10-02 本次构建：45 suites / 360 tests 全部通过，fresh APK 7,194,684 bytes；
+  SHA-256 `7e064e5c08e01f1c9a69f074336fccd0b1fc938f5da2795690a5d01d59659e70`。
+  使用已有 OpenJDK 17（本机未安装 DevEco JBR）。未安装、未发布，设备验证待执行。
+
+## 0.6.3 — 同步复审安全边界补齐
+
+**状态**：自动化与 fresh APK 通过，待实际 SAF/云盘与 Mate 验收（非候选，未发布）
+**Android 安装包版本**：`versionName = 0.6.3`，`versionCode = 15`
+
+- 归属 `008` D20–D24：云端 ETag 前置条件、独立下载源校验、远端目录链复核、跨 Vault
+  拒绝反馈与旧 JSON 实际迁移。保留 0.6.2 已验证修复和用户确认的 OneDrive 本机配置。
+- 独立最终全套验证成功：45 suites / 360 tests，0 failures / errors / skips；
+  `:app:testDebugUnitTest :app:assembleDebug --no-daemon --rerun-tasks` 22s 完成，36 tasks executed。
+  同步集成 34 项、远端安全 6 项、真实 JSON/偏好迁移 4 项和确认策略 4 项通过。
+- 原设计 reviewer 最终复查修复目录身份与工作缓存 alias 漏洞；独立重测后的 APK
+  7,194,276 bytes，SHA-256 `c91d7fc2040a49b042e117b669b20fc70b5a3b5c3ca5f3075a72e82acc658daf`。
+  08:23:10 +0800 产物替代早先 359 项的中间构建，不复用 0.6.2 结果或产物。
+- 缺少有效强 ETag 时明确拒绝云端覆盖/回收；模拟 HTTP 请求通过不等于 Google 实际
+  提供或执行条件已验收。网络最后一次目录检查后的外变仍可能发生，最终比较失败保护；
+  不宣称整个远端目录跨请求原子。本包未安装，实际 Google/SAF/UI/Mate 验收继续待执行。
+
+## 0.6.2 — Android 同步加固与原签名升级
+
+**状态**：开发调试版，待实际云盘、SAF 和 Mate 验收（非候选，未发布）
+**Android 安装包版本**：`versionName = 0.6.2`，`versionCode = 14`
+
+- 纳入 `008` D16–D19 的基线一致性、重名目录拒绝、下载定位/哈希及副本保护、安全失败
+  原因和 Provider/Vault 结果隔离；删除语义保持用户确认的双向可恢复删除。
+- 2026-10-02 用户恢复旧电脑调试密钥，公开证书 SHA-256 与手机现有安装一致；使用原证书
+  重新构建，并沿用手机旧 APK 中的公开 OneDrive 应用注册参数，不读取账号令牌。
+- 使用 `--rerun-tasks` 重跑 `:app:testDebugUnitTest :app:assembleDebug`：340 项测试，0 failure /
+  error / skip；36 项构建任务全部执行，fresh debug APK 成功。APK 7,184,016 bytes，SHA-256
+  `f59c40e4d33c2fa791fadac87dc518af04583b335e42411f887445602d16a311`。
+- 新 APK 证书 SHA-256 `b3be289894592585b98c0ed9076f98612e7cddb7c7574c6343ce0b400d018e20`
+  与手机原安装一致；`adb install -r` 返回 Success。Mate 60 ALN-AL10 已确认 `0.6.2`（14），
+  首次安装时间仍为 2026-09-12 23:56:20，更新时间 2026-10-02 07:04:30；未卸载或清除数据。
+- OneDrive 原注册签名哈希与实际证书不一致；保留原应用注册参数用于此次升级，真实登录仍
+  待核对微软后台登记。安装成功不代表实云盘、SAF、UI 或数据迁移已通过验收。
+
 ## 0.6.1 — Android 同步页面状态修复
 
 **状态**：开发基线，待 Mate 真机验收（非候选，未发布）
 **Android 安装包版本**：`versionName = 0.6.1`，`versionCode = 13`
+
+- 2026-10-02 fresh 自动化验证：用户安装工具链后，独立测试者使用 JDK 17 与 Android
+  SDK 执行 `:app:testDebugUnitTest :app:assembleDebug --no-daemon` 成功；43 suites / 340 tests，
+  0 failure / error / skip。包括同步集成 26 项、下载提交保护 13 项、失败/结果隔离策略 4 项。
+  主代理复核报告及 APK 校验值，原评审者确认工作树验证交付。生成调试 APK 7,183,932 bytes，
+  SHA-256 `ffe0239698bf0fd10c80fe437c3c05ce820cda09440a07998bc775e87b807a8e`。
+  此记录替代下述历史环境阻塞作为当前 Android 证据；实际 SAF、JSON 迁移、UI/Mate 与实云盘
+  仍未验证，因此仍为非候选开发基线，未安装/发布。HAP 构建环境缺失记录不受本次 Android 验证影响。
+
+- 2026-10-02 D17–D19 加固范围：拒绝云端同名目录歧义，下载确认实际路径/内容后才报告成功，
+  安全保留未知提交副本；同步详情保留原因代码及各 Provider/Vault 的最近结果。实现、测试和
+  验收继续归属 `008`。独立源码复核通过；JDK 17 新安装后重试因 Gradle 下载超时失败，
+  Android SDK 仍缺失，单测未编译/执行，未生成包含这些修复的 fresh APK。
+
+- 2026-10-01 同步基线加固（D16 / FR-829）：Google Drive / OneDrive 共用引擎只提交内容
+  已验证一致的基线，保留云端新增/更新下载与本地删除进入云端回收站的语义；旧基线先验证，
+  同步期间内容漂移保留旧基线并显示未完成。实施/验证记录见 `008`，当前缺少 JDK/Android
+  SDK，尚无包含此修复的 fresh APK，不能使用历史构建作为本次结果。
+- 2026-10-02 D16 复核：独立静态测试复核及原评审者源码复查通过，diff/Vault fixture 检查
+  通过；全套 JUnit/APK 命令仍因缺少 DevEco JBR 以 exit 126 受阻，真实云盘/设备未验收。
 
 - 修复严格确认无文件的附件目录树因说明文字、代码或旧路径提及 `assets/` 而无法删除；显式
   目录链接、不可读笔记、非空模糊引用及确认后内容变化仍阻止删除。

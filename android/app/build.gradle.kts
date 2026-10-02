@@ -13,8 +13,8 @@ android {
         applicationId = "com.jambus.heji"
         minSdk = 26
         targetSdk = 28
-        versionCode = 13
-        versionName = "0.6.1"
+        versionCode = 16
+        versionName = "0.6.4"
         val oneDriveClientId = (project.findProperty("HEJI_ONEDRIVE_CLIENT_ID") as String?)
             ?: System.getenv("HEJI_ONEDRIVE_CLIENT_ID")
             ?: ""
@@ -59,4 +59,5 @@ dependencies {
     implementation("com.google.android.gms:play-services-auth:21.6.0")
     implementation("com.microsoft.identity.client:msal:5.10.2")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

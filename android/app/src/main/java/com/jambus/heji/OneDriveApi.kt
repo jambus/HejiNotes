@@ -456,7 +456,7 @@ class OneDriveApi(
                 409, 412 -> "OneDrive content changed during sync ($code)"
                 429 -> "OneDrive is busy; try again later"
                 else -> "OneDrive request failed ($code)"
-            })
+            }, SyncFailurePolicy.http(code))
         }
     }
 

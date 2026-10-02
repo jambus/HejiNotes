@@ -74,6 +74,16 @@ class SyncDeleteReconciliationPolicyTest {
     }
 
     @Test
+    fun `metadata content change overrides matching revision and version`() {
+        val action = SyncDeleteReconciliationPolicy.evaluateRemoteOnly(
+            remoteId = "remote_id_123", remoteRevision = "rev_1", remoteVersion = 1L,
+            remoteMd5 = "hash_md5_edited", baseline = sampleBaseline(),
+            remoteHashSupplier = { throw IllegalStateException("Metadata already supplied the hash") }
+        )
+        assertEquals(SyncRemoteOnlyAction.DOWNLOAD, action)
+    }
+
+    @Test
     fun `remote file matches baseline revision when local deleted moves to remote trash`() {
         val base = sampleBaseline()
         val action = SyncDeleteReconciliationPolicy.evaluateRemoteOnly(

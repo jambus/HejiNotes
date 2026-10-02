@@ -50,6 +50,7 @@ class RemoteDriveSyncEngineIntegrationTest {
         }
 
         var onBeforeOpenSyncInput: ((String) -> Unit)? = null
+        var afterWrite: ((String) -> Unit)? = null
 
         override fun openSyncInput(file: VaultSyncFile): InputStream? {
             onBeforeOpenSyncInput?.invoke(file.relativePath)
@@ -90,13 +91,15 @@ class RemoteDriveSyncEngineIntegrationTest {
             if (failWriteIfAbsent) return false
             if (files.containsKey(relativePath)) return false
             files[relativePath] = input.readBytes()
+            afterWrite?.invoke(relativePath)
             return true
         }
     }
 
     private class FakeDriveGateway(
         override val providerId: String = "fake_drive",
-        override val providerName: String = "Fake Drive"
+        override val providerName: String = "Fake Drive",
+        val metadataHashes: Boolean = true
     ) : DriveGateway {
         val items = mutableMapOf<String, FakeItem>()
         val trashedIds = mutableListOf<String>()
@@ -105,6 +108,18 @@ class RemoteDriveSyncEngineIntegrationTest {
         val eventOrder = mutableListOf<String>()
         var throwOnScan: Exception? = null
         var throwOnDownload: Exception? = null
+        var mutationEtag: String? = "\"valid-etag\""
+        var revisionMd5: String? = null
+        var downloadBody: ((String, Int) -> String?)? = null
+        var onScan: ((String) -> Unit)? = null
+        var onCreate: ((FakeItem) -> FakeItem)? = null
+        val downloadedIds = mutableListOf<String>()
+
+        init { addItem("root-1", "", "Remote Vault", "", mimeType = "application/vnd.google-apps.folder") }
+
+        private fun snapshot(item: FakeItem): DriveItem = item.toDriveItem().let {
+            if (metadataHashes) it else it.copy(md5 = null)
+        }
 
         data class FakeItem(
             val id: String,
@@ -146,16 +161,17 @@ class RemoteDriveSyncEngineIntegrationTest {
 
         override fun listChildren(parentId: String): List<DriveItem> {
             throwOnScan?.let { throw it }
+            onScan?.invoke(parentId)
             return items.values
                 .filter { it.parentId == parentId && !it.trashed }
-                .map { it.toDriveItem() }
+                .map(::snapshot)
         }
 
         override fun createFolder(parentId: String, name: String): DriveItem {
             val id = "folder_${items.size + 1}"
             val item = FakeItem(id, parentId, name, folderMimeType, ByteArray(0))
             items[id] = item
-            return item.toDriveItem()
+            return (onCreate?.invoke(item) ?: item).toDriveItem()
         }
 
         override fun upload(parentId: String, name: String, mimeType: String, input: InputStream) {
@@ -190,7 +206,7 @@ class RemoteDriveSyncEngineIntegrationTest {
         }
 
         override fun refresh(id: String): DriveItem {
-            return (items[id] ?: throw DriveApiException("Not found")).toDriveItem()
+            return snapshot(items[id] ?: throw DriveApiException("Not found"))
         }
 
         var onRevision: ((String) -> Unit)? = null
@@ -198,13 +214,14 @@ class RemoteDriveSyncEngineIntegrationTest {
         override fun revision(id: String): DriveRevision {
             onRevision?.invoke(id)
             val item = items[id] ?: throw DriveApiException("Not found")
-            return DriveRevision(item.toDriveItem(), "etag-$id")
+            return DriveRevision(snapshot(item).let { if (revisionMd5 != null && !isFolder(it)) it.copy(md5 = revisionMd5) else it }, mutationEtag)
         }
 
         override fun download(item: DriveItem): InputStream {
             throwOnDownload?.let { throw it }
+            downloadedIds += item.id
             val fake = items[item.id] ?: throw DriveApiException("Not found")
-            return ByteArrayInputStream(fake.content)
+            return ByteArrayInputStream(downloadBody?.invoke(item.id, downloadedIds.size)?.toByteArray() ?: fake.content)
         }
     }
 
@@ -236,6 +253,465 @@ class RemoteDriveSyncEngineIntegrationTest {
             currentBaseline = baseline
             return true
         }
+    }
+
+    private fun forEachProvider(block: (FakeDriveGateway) -> Unit) {
+        block(FakeDriveGateway("google_drive", "Google Drive", metadataHashes = true))
+        block(FakeDriveGateway("onedrive", "OneDrive", metadataHashes = false))
+    }
+
+    @Test
+    fun `missing precondition refuses replacement and recycle before any cloud mutation`() = forEachProvider { gateway ->
+        for (missingLocal in listOf(false, true)) {
+            val vault = FakeSyncVaultAccessor()
+            if (!missingLocal) vault.setFile("doc.md", "local-edit")
+            val old = baselineFor("original")
+            val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+            gateway.addItem("item-doc", "root-1", "doc.md", "original")
+            gateway.mutationEtag = null
+            gateway.eventOrder.clear()
+            val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+            assertFalse(result.isSuccessful)
+            assertEquals(SyncErrorReason.PRECONDITION_UNAVAILABLE, result.errorDetails.single().reason)
+            assertTrue(gateway.eventOrder.isEmpty())
+            assertEquals(old, store.currentBaseline)
+            assertEquals("original", String(gateway.items.getValue("item-doc").content))
+        }
+    }
+
+    @Test
+    fun `wrong EOF body or missing hash disagreement does not replace original`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "original") }
+        val old = baselineFor("original")
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        gateway.addItem("item-doc", "root-1", "doc.md", "cloud-update", revision = "rev-2")
+        gateway.downloadBody = { _, count -> if (gateway.metadataHashes || count >= 2) "wrong-short" else null }
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(result.isSuccessful)
+        assertEquals(SyncErrorReason.CONTENT_MISMATCH, result.errorDetails.single().reason)
+        assertEquals("original", String(vault.files.getValue("doc.md")))
+        assertEquals(old, store.currentBaseline)
+        assertTrue(gateway.eventOrder.isEmpty())
+    }
+
+    @Test
+    fun `revision changes during actual download fail before local replacement`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "original") }
+        val old = baselineFor("original")
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        val item = gateway.addItem("item-doc", "root-1", "doc.md", "cloud-update", revision = "rev-2")
+        gateway.downloadBody = { id, count ->
+            if (id == "item-doc" && count == if (gateway.metadataHashes) 1 else 2) {
+                gateway.items[id] = item.copy(revision = "rev-3")
+            }
+            null
+        }
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(result.isSuccessful)
+        assertEquals(SyncErrorReason.REMOTE_CHANGED, result.errorDetails.single().reason)
+        assertEquals("original", String(vault.files.getValue("doc.md")))
+        assertEquals(old, store.currentBaseline)
+    }
+
+    @Test
+    fun `cached folder rename move or replacement refuses uploading to the old identity`() = forEachProvider { gateway ->
+        for (change in listOf("rename", "move", "replace")) {
+            val vault = FakeSyncVaultAccessor().apply { setFile("notes/new.md", "local") }
+            val store = FakeDriveBaselineStore()
+            val folder = gateway.addItem("notes-folder", "root-1", "notes", "", mimeType = gateway.folderMimeType)
+            var reads = 0
+            gateway.onScan = { parent ->
+                if (parent == "root-1" && ++reads == 2) {
+                    gateway.items[folder.id] = when (change) {
+                        "rename" -> folder.copy(name = "renamed")
+                        "move" -> folder.copy(parentId = "outside")
+                        else -> folder.copy(trashed = true)
+                    }
+                    if (change == "replace") gateway.addItem("replacement-folder", "root-1", "notes", "", mimeType = gateway.folderMimeType)
+                }
+            }
+            gateway.eventOrder.clear()
+            val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+            assertFalse(result.isSuccessful)
+            assertTrue(gateway.eventOrder.isEmpty())
+            assertNull(store.currentBaseline)
+            gateway.onScan = null
+            gateway.items.remove(folder.id)
+            gateway.items.remove("replacement-folder")
+        }
+    }
+
+    @Test
+    fun `incorrect or ambiguous folder creation response refuses file upload`() = forEachProvider { gateway ->
+        for (ambiguous in listOf(false, true)) {
+            val vault = FakeSyncVaultAccessor().apply { setFile("new-folder/new.md", "local") }
+            val store = FakeDriveBaselineStore()
+            gateway.onCreate = { item ->
+                if (ambiguous) {
+                    gateway.addItem("duplicate-folder", item.parentId, item.name, "", mimeType = gateway.folderMimeType)
+                    item
+                } else item.copy(name = "provider-renamed")
+            }
+            gateway.eventOrder.clear()
+            val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+            assertFalse(result.isSuccessful)
+            assertEquals(SyncErrorReason.PATH_AMBIGUOUS, result.errorDetails.single().reason)
+            assertTrue(gateway.eventOrder.isEmpty())
+            assertNull(store.currentBaseline)
+            gateway.items.entries.removeAll { it.value.name == "new-folder" }
+        }
+    }
+
+    @Test
+    fun `directory moved after preserving local conflict refuses server copy`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("notes/doc.md", "local-edit") }
+        val store = FakeDriveBaselineStore()
+        val folder = gateway.addItem("notes-folder", "root-1", "notes", "", mimeType = gateway.folderMimeType)
+        gateway.addItem("item-doc", folder.id, "doc.md", "cloud-edit", revision = "rev-2")
+        vault.afterWrite = { path ->
+            if (path.contains("conflict")) gateway.items[folder.id] = folder.copy(parentId = "outside")
+        }
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(result.isSuccessful)
+        assertEquals("local-edit", String(vault.files.getValue("notes/doc.md")))
+        assertTrue(vault.files.filterKeys { it.contains("conflict") }.values.any { String(it) == "cloud-edit" })
+        assertTrue(gateway.copiedCalls.isEmpty())
+        assertTrue(gateway.eventOrder.isEmpty())
+        assertNull(store.currentBaseline)
+    }
+
+    @Test
+    fun `checksum becoming available during independent read rejects a corrupt first body`() {
+        val gateway = FakeDriveGateway("google_drive", "Google Drive", metadataHashes = false)
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "original") }
+        val old = baselineFor("original")
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        gateway.addItem("item-doc", "root-1", "doc.md", "cloud-update", revision = "rev-2")
+        gateway.revisionMd5 = md5("cloud-update")
+        gateway.downloadBody = { _, _ -> "wrong-short" }
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(result.isSuccessful)
+        assertEquals(SyncErrorReason.CONTENT_MISMATCH, result.errorDetails.single().reason)
+        assertEquals("original", String(vault.files.getValue("doc.md")))
+        assertEquals(old, store.currentBaseline)
+    }
+
+    @Test
+    fun `move rescan cannot replace original folder identity or recycle replacement content`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("notes/target.md", "note-content") }
+        val store = FakeDriveBaselineStore()
+        val journal = FakeMoveChangeStore().apply {
+            changesList.add(MoveBundleChange(
+                id = "move-parent-drift", vaultId = "vault-1",
+                sourceToTarget = mapOf("notes/source.md" to "notes/target.md"),
+                beforeSha256 = mapOf("notes/source.md" to sha256("note-content")),
+                afterSha256 = mapOf("notes/target.md" to sha256("note-content")),
+                state = LocalChangeState.COMMITTED, committedAt = 2000L
+            ))
+        }
+        val folder = gateway.addItem("old-parent", "root-1", "notes", "", mimeType = gateway.folderMimeType)
+        gateway.addItem("item-source", folder.id, "source.md", "note-content")
+        gateway.addItem("item-target", folder.id, "target.md", "note-content")
+        var replaced = false
+        val engine = RemoteDriveSyncEngine(vault, gateway, "vault-1", "acc-1", journal, store) { progress ->
+            if (!replaced && progress.completed == 1) {
+                replaced = true
+                gateway.items[folder.id] = folder.copy(trashed = true)
+                gateway.addItem("new-parent", "root-1", "notes", "", mimeType = gateway.folderMimeType)
+                gateway.addItem("new-source", "new-parent", "source.md", "external-edit")
+                gateway.addItem("new-target", "new-parent", "target.md", "note-content")
+            }
+        }
+        val result = engine.sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(result.isSuccessful)
+        assertEquals(SyncErrorReason.REMOTE_CHANGED, result.errorDetails.single().reason)
+        assertTrue(gateway.trashedIds.isEmpty())
+        assertTrue(gateway.copiedCalls.isEmpty())
+        assertTrue(journal.acknowledged.isEmpty())
+        assertNull(store.currentBaseline)
+        assertEquals("external-edit", String(gateway.items.getValue("new-source").content))
+    }
+
+    @Test
+    fun `duplicate empty remote folders fail before any mutation`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("upload.md", "local") }
+        val store = FakeDriveBaselineStore()
+        gateway.addItem("folder-1", "root-1", "notes", "", mimeType = gateway.folderMimeType)
+        gateway.addItem("folder-2", "root-1", "notes", "", mimeType = gateway.folderMimeType)
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(result.isSuccessful)
+        assertEquals(SyncErrorReason.PATH_AMBIGUOUS, result.errorDetails.single().reason)
+        assertTrue(gateway.eventOrder.isEmpty())
+        assertEquals(setOf("upload.md"), vault.files.keys)
+        assertNull(store.currentBaseline)
+    }
+
+    @Test
+    fun `remote file folder collision fails before downloading either child`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor()
+        val store = FakeDriveBaselineStore()
+        gateway.addItem("folder", "root-1", "notes.md", "", mimeType = gateway.folderMimeType)
+        gateway.addItem("file", "root-1", "notes.md", "cloud")
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(result.isSuccessful)
+        assertEquals(SyncErrorReason.PATH_AMBIGUOUS, result.errorDetails.single().reason)
+        assertTrue(gateway.downloadedIds.isEmpty())
+        assertTrue(gateway.eventOrder.isEmpty())
+        assertTrue(vault.files.isEmpty())
+    }
+
+    private fun baselineFor(content: String, verified: Boolean = true, revision: String = "rev-1"): DriveSyncBaseline =
+        DriveSyncBaseline("vault-1", "root-1", "acc-1", mapOf("doc.md" to DriveBaselineFile(
+            path = "doc.md", localSha256 = sha256(content), remoteId = "item-doc",
+            remoteMd5 = md5(content), remoteVersion = null, localMd5 = md5(content),
+            remoteRevision = revision, contentVerified = verified
+        )), 1000L)
+
+    private fun engineFor(
+        vault: FakeSyncVaultAccessor,
+        gateway: FakeDriveGateway,
+        store: FakeDriveBaselineStore,
+        onProgress: (SyncProgress) -> Unit = {}
+    ): RemoteDriveSyncEngine = RemoteDriveSyncEngine(
+        repository = vault, api = gateway, vaultId = "vault-1", accountId = "acc-1",
+        baselineStore = store, onProgress = onProgress
+    )
+
+    @Test
+    fun `both providers download new remote content then propagate local deletion to recycle bin`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor()
+        val store = FakeDriveBaselineStore()
+        val root = DriveVaultRoot("root-1", "Remote Vault")
+        gateway.addItem("item-doc", root.id, "doc.md", "cloud-content")
+        val engine = engineFor(vault, gateway, store)
+
+        val first = engine.sync(root)
+        assertTrue(first.errors.toString(), first.isSuccessful)
+        assertEquals(1, first.downloaded)
+        assertEquals("cloud-content", String(vault.files.getValue("doc.md"), StandardCharsets.UTF_8))
+        assertTrue(store.currentBaseline!!.files.getValue("doc.md").contentVerified)
+        gateway.downloadedIds.clear()
+        val repeat = engineFor(vault, gateway, store).sync(root)
+        assertTrue(repeat.errors.toString(), repeat.isSuccessful)
+        assertEquals(1, repeat.unchanged)
+        assertEquals(0, gateway.downloadedIds.size)
+
+        vault.files.remove("doc.md")
+        val deleted = engineFor(vault, gateway, store).sync(root)
+        assertTrue(deleted.errors.toString(), deleted.isSuccessful)
+        assertEquals(1, deleted.deleted)
+        assertEquals(0, deleted.downloaded)
+        assertEquals(listOf("item-doc"), gateway.trashedIds)
+        assertEquals("\"valid-etag\"", gateway.trashedEtags["item-doc"])
+        assertTrue(store.currentBaseline!!.files.isEmpty())
+    }
+
+    @Test
+    fun `both providers download remote update when local file was deleted`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor()
+        val store = FakeDriveBaselineStore().apply { currentBaseline = baselineFor("old-content") }
+        gateway.addItem("item-doc", "root-1", "doc.md", "new-cloud-content", revision = "rev-2")
+
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(result.errors.toString(), result.isSuccessful)
+        assertEquals(1, result.downloaded)
+        assertEquals(0, result.deleted)
+        assertTrue(gateway.trashedIds.isEmpty())
+        assertEquals("new-cloud-content", String(vault.files.getValue("doc.md"), StandardCharsets.UTF_8))
+    }
+
+    @Test
+    fun `both providers propagate remote deletion but preserve later local edit`() = forEachProvider { gateway ->
+        for (content in listOf("original", "edited")) {
+            val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", content) }
+            val store = FakeDriveBaselineStore().apply { currentBaseline = baselineFor("original") }
+            val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+            assertTrue(result.errors.toString(), result.isSuccessful)
+            if (content == "original") {
+                assertEquals(1, result.deleted)
+                assertEquals(listOf("doc.md"), vault.trashedFiles)
+            } else {
+                assertEquals(1, result.uploaded)
+                assertEquals(0, result.deleted)
+                assertTrue(vault.trashedFiles.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun `remote update after comparison does not poison baseline and downloads on retry`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "original") }
+        val old = baselineFor("original")
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        val item = gateway.addItem("item-doc", "root-1", "doc.md", "original")
+        var injected = false
+        val engine = engineFor(vault, gateway, store) { progress ->
+            if (!injected && progress.completed == 1) {
+                injected = true
+                gateway.items[item.id] = item.copy(content = "remote-later".toByteArray(), revision = "rev-2")
+            }
+        }
+        val first = engine.sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(first.isSuccessful)
+        assertEquals(old, store.currentBaseline)
+        val retry = engine.sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(retry.errors.toString(), retry.isSuccessful)
+        assertEquals(1, retry.downloaded)
+        assertEquals("remote-later", String(vault.files.getValue("doc.md"), StandardCharsets.UTF_8))
+    }
+
+    @Test
+    fun `same size and timestamp local save after comparison uploads on retry`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "before") }
+        val old = baselineFor("before")
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        gateway.addItem("item-doc", "root-1", "doc.md", "before")
+        var injected = false
+        val engine = engineFor(vault, gateway, store) { progress ->
+            if (!injected && progress.completed == 1) {
+                injected = true
+                vault.setFile("doc.md", "edited") // Same size; fake SAF mtime remains 1000.
+            }
+        }
+        assertFalse(engine.sync(DriveVaultRoot("root-1", "Remote Vault")).isSuccessful)
+        assertEquals(old, store.currentBaseline)
+        val retry = engine.sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(retry.errors.toString(), retry.isSuccessful)
+        assertEquals(1, retry.uploaded)
+        assertEquals("edited", String(gateway.items.getValue("item-doc").content, StandardCharsets.UTF_8))
+    }
+
+    @Test
+    fun `cloud path added during run prevents success and downloads on retry`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "original") }
+        val old = baselineFor("original")
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        gateway.addItem("item-doc", "root-1", "doc.md", "original")
+        var injected = false
+        val engine = engineFor(vault, gateway, store) { progress ->
+            if (!injected && progress.completed == 1) {
+                injected = true
+                gateway.addItem("new-item", "root-1", "new.md", "new-cloud-file")
+            }
+        }
+        assertFalse(engine.sync(DriveVaultRoot("root-1", "Remote Vault")).isSuccessful)
+        assertEquals(old, store.currentBaseline)
+        val retry = engine.sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(retry.errors.toString(), retry.isSuccessful)
+        assertEquals(1, retry.downloaded)
+        assertTrue(vault.files.containsKey("new.md"))
+    }
+
+    @Test
+    fun `legacy manufactured hash never recycles different cloud content`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor()
+        val store = FakeDriveBaselineStore().apply { currentBaseline = baselineFor("old-local", verified = false) }
+        gateway.addItem("item-doc", "root-1", "doc.md", "real-cloud-content")
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(result.errors.toString(), result.isSuccessful)
+        assertEquals(1, result.downloaded)
+        assertTrue(gateway.trashedIds.isEmpty())
+        assertEquals("real-cloud-content", String(vault.files.getValue("doc.md"), StandardCharsets.UTF_8))
+    }
+
+    @Test
+    fun `legacy manufactured baseline with both files preserves conflict`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "old-local") }
+        val store = FakeDriveBaselineStore().apply { currentBaseline = baselineFor("old-local", verified = false) }
+        gateway.addItem("item-doc", "root-1", "doc.md", "real-cloud-content")
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(result.errors.toString(), result.isSuccessful)
+        assertEquals(1, result.conflicts)
+        assertEquals("old-local", String(vault.files.getValue("doc.md"), StandardCharsets.UTF_8))
+        assertTrue(vault.files.filterKeys { it != "doc.md" }.values.any {
+            String(it, StandardCharsets.UTF_8) == "real-cloud-content"
+        })
+    }
+
+    @Test
+    fun `valid legacy baseline is verified once and stable OneDrive avoids repeat downloads`() {
+        val gateway = FakeDriveGateway("onedrive", "OneDrive", metadataHashes = false)
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "original") }
+        val store = FakeDriveBaselineStore().apply { currentBaseline = baselineFor("original", verified = false) }
+        gateway.addItem("item-doc", "root-1", "doc.md", "original")
+        val engine = engineFor(vault, gateway, store)
+        assertTrue(engine.sync(DriveVaultRoot("root-1", "Remote Vault")).isSuccessful)
+        assertEquals(listOf("item-doc"), gateway.downloadedIds)
+        assertTrue(store.currentBaseline!!.files.getValue("doc.md").contentVerified)
+        gateway.downloadedIds.clear()
+        assertTrue(engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault")).isSuccessful)
+        assertTrue(gateway.downloadedIds.isEmpty())
+    }
+
+    @Test
+    fun `unknown legacy verification leaves baseline untouched and never deletes`() {
+        val gateway = FakeDriveGateway("onedrive", "OneDrive", metadataHashes = false)
+        val vault = FakeSyncVaultAccessor()
+        val old = baselineFor("original", verified = false)
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        gateway.addItem("item-doc", "root-1", "doc.md", "original")
+        gateway.throwOnDownload = DriveApiException("Simulated download failure")
+        assertFalse(engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault")).isSuccessful)
+        assertEquals(old, store.currentBaseline)
+        assertTrue(gateway.trashedIds.isEmpty())
+    }
+
+    @Test
+    fun `changed revision legacy remote only file downloads instead of trusting old hashes`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor()
+        val store = FakeDriveBaselineStore().apply { currentBaseline = baselineFor("original", verified = false) }
+        gateway.addItem("item-doc", "root-1", "doc.md", "updated", revision = "rev-2")
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(result.errors.toString(), result.isSuccessful)
+        assertEquals(1, result.downloaded)
+        assertTrue(gateway.trashedIds.isEmpty())
+    }
+
+    @Test
+    fun `demonstrably divergent stored fingerprints never authorize cloud deletion`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor()
+        val old = baselineFor("local-version")
+        val divergent = old.copy(files = old.files.mapValues { (_, file) ->
+            file.copy(remoteMd5 = md5("cloud-version"))
+        })
+        val store = FakeDriveBaselineStore().apply { currentBaseline = divergent }
+        gateway.addItem("item-doc", "root-1", "doc.md", "cloud-version")
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(result.errors.toString(), result.isSuccessful)
+        assertEquals(1, result.downloaded)
+        assertTrue(gateway.trashedIds.isEmpty())
+    }
+
+    @Test
+    fun `final OneDrive content read must keep the listed revision before committing`() {
+        val gateway = FakeDriveGateway("onedrive", "OneDrive", metadataHashes = false)
+        val vault = FakeSyncVaultAccessor()
+        val store = FakeDriveBaselineStore()
+        val item = gateway.addItem("item-doc", "root-1", "doc.md", "cloud-content")
+        gateway.onRevision = { id ->
+            if (id == "item-doc") gateway.items[id] = item.copy(revision = "changed-during-verification")
+        }
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(result.isSuccessful)
+        assertNull(store.currentBaseline)
+        assertTrue(gateway.trashedIds.isEmpty())
+    }
+
+    @Test
+    fun `unreadable final local file fails commit instead of silently omitting path`() = forEachProvider { gateway ->
+        val vault = FakeSyncVaultAccessor().apply { setFile("doc.md", "original") }
+        val old = baselineFor("original")
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        gateway.addItem("item-doc", "root-1", "doc.md", "original")
+        var opened = 0
+        vault.onBeforeOpenSyncInput = { path ->
+            opened++
+            if (opened == 2) vault.files.remove(path)
+        }
+        val result = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(result.isSuccessful)
+        assertEquals(old, store.currentBaseline)
+        assertTrue(gateway.trashedIds.isEmpty())
     }
 
     @Test
@@ -524,7 +1000,8 @@ class RemoteDriveSyncEngineIntegrationTest {
                     remoteMd5 = md5("original-content"),
                     remoteVersion = null,
                     remoteRevision = "rev-1",
-                    localMd5 = md5("original-content")
+                    localMd5 = md5("original-content"),
+                    contentVerified = true
                 )
             ),
             completedAt = 1000L
@@ -594,7 +1071,7 @@ class RemoteDriveSyncEngineIntegrationTest {
         assertTrue("Sync should succeed: ${result.errors}", result.isSuccessful)
         assertEquals(1, result.deleted)
         assertTrue("Remote item must be trashed", gateway.trashedIds.contains("item-doc"))
-        assertEquals("etag-item-doc", gateway.trashedEtags["item-doc"])
+        assertEquals("\"valid-etag\"", gateway.trashedEtags["item-doc"])
     }
 
     @Test
@@ -617,7 +1094,8 @@ class RemoteDriveSyncEngineIntegrationTest {
                     remoteMd5 = md5("content"),
                     remoteVersion = null,
                     remoteRevision = "rev-1",
-                    localMd5 = md5("content")
+                    localMd5 = md5("content"),
+                    contentVerified = true
                 )
             ),
             completedAt = 1000L
@@ -641,5 +1119,28 @@ class RemoteDriveSyncEngineIntegrationTest {
         val result = engine.sync(root)
         assertFalse("Sync should fail due to concurrent remote modification", result.isSuccessful)
         assertFalse("Remote item must not be trashed when revision changed", gateway.trashedIds.contains("item-doc"))
+    }
+
+    @Test
+    fun `fresh hash drift with same revision blocks cloud recycle and downloads on retry`() {
+        val vault = FakeSyncVaultAccessor()
+        val gateway = FakeDriveGateway("google_drive", "Google Drive")
+        val old = baselineFor("original")
+        val store = FakeDriveBaselineStore().apply { currentBaseline = old }
+        val item = gateway.addItem("item-doc", "root-1", "doc.md", "original")
+        gateway.onRevision = { id ->
+            if (id == "item-doc") gateway.items[id] = item.copy(content = "changed-cloud-content".toByteArray())
+        }
+        val first = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertFalse(first.isSuccessful)
+        assertTrue(gateway.trashedIds.isEmpty())
+        assertEquals(old, store.currentBaseline)
+
+        gateway.onRevision = null
+        val retry = engineFor(vault, gateway, store).sync(DriveVaultRoot("root-1", "Remote Vault"))
+        assertTrue(retry.errors.toString(), retry.isSuccessful)
+        assertEquals(1, retry.downloaded)
+        assertTrue(gateway.trashedIds.isEmpty())
+        assertEquals("changed-cloud-content", String(vault.files.getValue("doc.md"), StandardCharsets.UTF_8))
     }
 }
