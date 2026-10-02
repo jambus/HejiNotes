@@ -30,8 +30,8 @@ class SyncTaskSnapshotTest {
     }
 
     @Test fun `safePath preserves Unicode and spaces in Vault relative paths`() {
-        val error = "00 MOC/Engineering Center 组织调整 MOC.md: OneDrive request failed (412)"
-        assertEquals("00 MOC/Engineering Center 组织调整 MOC.md", SyncTaskStateStore.safePath(error))
+        val path = "00 MOC/Engineering Center 组织调整 MOC.md"
+        assertEquals(path, SyncTaskStateStore.safePath(path))
     }
 
     @Test fun `safePath rejects path traversal and control characters`() {

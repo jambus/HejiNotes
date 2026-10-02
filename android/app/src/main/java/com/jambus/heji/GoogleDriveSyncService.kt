@@ -18,9 +18,10 @@ data class SyncRunResult(
     val conflicts: Int,
     val errors: List<String>,
     val cancelled: Boolean,
-    val deleted: Int = 0
+    val deleted: Int = 0,
+    val errorDetails: List<SyncErrorDetail> = emptyList()
 ) {
-    val isSuccessful: Boolean get() = errors.isEmpty() && !cancelled
+    val isSuccessful: Boolean get() = errors.isEmpty() && errorDetails.isEmpty() && !cancelled
 }
 typealias DriveSyncResult = SyncRunResult
 
@@ -102,7 +103,8 @@ internal object SyncItemComparisonPolicy {
         val remoteRevisionMatches = baseline != null &&
             baseline.remoteId == remoteId &&
             (baseline.remoteRevision ?: baseline.remoteVersion?.toString()) != null &&
-            (baseline.remoteRevision ?: baseline.remoteVersion?.toString()) == remoteRevision
+            (baseline.remoteRevision ?: baseline.remoteVersion?.toString()) == remoteRevision &&
+            (remoteMd5 == null || baseline.remoteMd5.equals(remoteMd5, true))
         val localChanged = baseline == null || !baseline.localSha256.equals(localSha256, true)
         if (!localChanged && remoteRevisionMatches) {
             return SyncItemComparisonResult(SyncComparisonAction.UNCHANGED, baseline?.remoteMd5, true)
@@ -152,7 +154,8 @@ internal object SyncDeleteReconciliationPolicy {
         if (baseline == null) return SyncRemoteOnlyAction.DOWNLOAD
         val remoteRevisionMatches = baseline.remoteId == remoteId &&
             ((baseline.remoteRevision != null && baseline.remoteRevision == remoteRevision) ||
-             (baseline.remoteVersion != null && baseline.remoteVersion == remoteVersion))
+             (baseline.remoteVersion != null && baseline.remoteVersion == remoteVersion)) &&
+            (remoteMd5 == null || baseline.remoteMd5.equals(remoteMd5, true))
         val remoteChanged = if (remoteRevisionMatches) {
             false
         } else {
@@ -192,35 +195,68 @@ class RemoteDriveSyncEngine(
     ) : this(repository, api, vaultId, accountId, changeStore, baselineStore, SyncCancellationCoordinator(cancelled), onProgress)
 
     private val providerName: String get() = api.providerName
+    private var selectedRootId = ""
+    private var selectedRootIdentity = ""
+    private var folderIdentities: MutableMap<String, String> = mutableMapOf()
+    private val sourceDigests = mutableMapOf<String, LocalFileDigests>()
 
     fun sync(root: DriveVaultRoot): SyncRunResult {
         val errors = mutableListOf<String>()
+        val errorDetails = mutableListOf<SyncErrorDetail>()
+        fun recordFailure(failure: Exception, path: String = "") {
+            val detail = SyncFailurePolicy.fromException(failure, path)
+            errors += detail.reason.name
+            errorDetails += detail
+        }
+        fun result(uploaded: Int, downloaded: Int, unchanged: Int, conflicts: Int, errors: List<String>, cancelled: Boolean, deleted: Int = 0) =
+            SyncRunResult(uploaded, downloaded, unchanged, conflicts, errors, cancelled, deleted, errorDetails.toList())
         val remoteFiles = linkedMapOf<String, DriveItem>()
         val remoteFolders = linkedMapOf<String, String>()
+        selectedRootId = root.id
+        selectedRootIdentity = ""
+        sourceDigests.clear()
+        folderIdentities = linkedMapOf()
         remoteFolders[""] = root.id
         try {
+            val rootItem = api.revision(root.id).item
+            if (!api.isFolder(rootItem)) throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS)
+            selectedRootIdentity = rootItem.id
             if (!scanRemote(root.id, "", remoteFiles, remoteFolders)) {
                 return SyncRunResult(0, 0, 0, 0, emptyList(), true)
             }
+            // Initial proof must never alias working caches that move reconciliation refreshes.
+            folderIdentities.putAll(remoteFolders)
         } catch (failure: Exception) {
             if (failure is OneDriveReloginRequired) throw failure
-            return SyncRunResult(0, 0, 0, 0, listOf(userMessage(failure)), false)
+            recordFailure(failure)
+            return result(0, 0, 0, 0, errors, false)
         }
         if (coordinator.isCancelled) return SyncRunResult(0, 0, 0, 0, emptyList(), true)
 
-        val baseline = when (val loaded = baselineStore?.load(vaultId, root.id, accountId)) {
+        val storedBaseline = when (val loaded = baselineStore?.load(vaultId, root.id, accountId)) {
             null, DriveBaselineLoad.Missing -> emptyMap()
             is DriveBaselineLoad.Present -> loaded.baseline.files
-            DriveBaselineLoad.Corrupt -> return SyncRunResult(0, 0, 0, 0, listOf("同步基线损坏，本次同步未修改远端"), false)
+            DriveBaselineLoad.Corrupt -> return SyncRunResult(0, 0, 0, 0, listOf("同步基线损坏，本次同步未修改远端"), false,
+                errorDetails = listOf(SyncErrorDetail(SyncErrorCode.ITEM_FAILED, reason = SyncErrorReason.BASELINE_FAILED)))
         }
+        val baseline = try {
+            validateBaseline(storedBaseline, remoteFiles)
+        } catch (failure: Exception) {
+            if (failure is OneDriveReloginRequired) throw failure
+            recordFailure(failure)
+            return result(0, 0, 0, 0, errors, coordinator.isCancelled)
+        }
+        if (coordinator.isCancelled) return SyncRunResult(0, 0, 0, 0, emptyList(), true)
 
-        val localFiles = try { repository.syncFilesStrict().associateBy { it.relativePath } } catch (_: Exception) {
-            return SyncRunResult(0, 0, 0, 0, listOf("无法完整读取本地 Vault，本次同步未修改远端"), false)
+        val localFiles = try { repository.syncFilesStrict().associateBy { it.relativePath } } catch (failure: Exception) {
+            recordFailure(if (failure is SecurityException) failure else SyncOperationException(SyncErrorReason.LOCAL_READ_FAILED))
+            return result(0, 0, 0, 0, errors, false)
         }
         val localSnapshots = mutableMapOf<String, LocalFileSnapshot>()
         for ((path, file) in localFiles) {
             val digest = LocalFileDigestsCalculator.computeDigests(repository.openSyncInput(file))
-                ?: return SyncRunResult(0, 0, 0, 0, listOf("无法读取本地同步文件"), false)
+                ?: return SyncRunResult(0, 0, 0, 0, listOf("无法读取本地同步文件"), false,
+                    errorDetails = listOf(SyncErrorDetail(SyncErrorCode.ITEM_FAILED, SyncFailurePolicy.safePath(path), SyncErrorReason.LOCAL_READ_FAILED)))
             localSnapshots[path] = LocalFileSnapshot(digest, file.document.lastModified, file.document.size)
         }
         val localDigests = localSnapshots.mapValues { it.value.digests }.toMutableMap()
@@ -282,7 +318,7 @@ class RemoteDriveSyncEngine(
                                             }
                                             uploaded++
                                         } else {
-                                            errors += "$path: 本地移入回收站失败: ${trashResult.kind}"
+                                            recordFailure(SyncOperationException(SyncErrorReason.LOCAL_WRITE_FAILED), path)
                                         }
                                     }
                                 }
@@ -300,7 +336,7 @@ class RemoteDriveSyncEngine(
                             remoteId = remote.id,
                             remoteRevision = remote.revision,
                             baseline = baseline[path],
-                            remoteHashSupplier = { md5(api.download(remote)) }
+                            remoteHashSupplier = { independentRemoteDigests(remote, path).md5 }
                         )
                         val remoteHash = decision.remoteHash
                         val remoteRevisionMatches = decision.remoteRevisionMatches
@@ -310,11 +346,13 @@ class RemoteDriveSyncEngine(
                                 report(completed, total, "正在上传本地更新：$path")
                                 val revision = api.revision(remote.id)
                                 val current = revision.item
-                                val currentHash = current.md5 ?: if (remoteRevisionMatches) remoteHash else md5(api.download(current))
+                                val currentHash = current.md5 ?: if (remoteRevisionMatches) remoteHash else independentRemoteDigests(current, path).md5
                                 if (current.revision != remote.revision || !currentHash.equals(remoteHash, true)) {
-                                    throw IllegalStateException("$providerName file changed during sync")
+                                    throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
                                 }
-                                repository.openSyncInput(local)?.use { api.replace(remote.id, revision.etag, local.document.mimeType ?: "application/octet-stream", it) }
+                                verifyRemoteFile(remote, path)
+                                val precondition = DriveMutationPrecondition.requireStrong(revision.etag)
+                                repository.openSyncInput(local)?.use { api.replace(remote.id, precondition, local.document.mimeType ?: "application/octet-stream", it) }
                                     ?: throw IllegalStateException("Unable to read local file")
                                 uploaded++
                             }
@@ -322,39 +360,45 @@ class RemoteDriveSyncEngine(
                                 report(completed, total, "正在下载远端更新：$path")
                                 if (!localMd5[path].equals(repository.syncMd5(path), true)) {
                                     val conflict = conflictPath(path, providerName, conflictStamp())
-                                    api.download(remote).use { input ->
+                                    verifiedDownload(remote, path).use { input ->
                                         if (!repository.writeSyncFileIfAbsent(conflict, remote.mimeType, input)) throw IllegalStateException("Unable to preserve concurrent local edit")
                                     }
                                     conflicts++
                                 } else {
-                                    val written = api.download(remote).use { input -> repository.writeSyncFile(path, remote.mimeType, input, localMd5[path]) }
+                                    val written = verifiedDownload(remote, path).use { input -> repository.writeSyncFile(path, remote.mimeType, input, localMd5[path]) }
                                     if (written) {
                                         localDigests.remove(path)
                                         localSnapshots.remove(path)
                                         downloaded++
                                     } else {
                                         val conflict = conflictPath(path, providerName, conflictStamp())
-                                        api.download(remote).use { input -> if (!repository.writeSyncFileIfAbsent(conflict, remote.mimeType, input)) throw IllegalStateException("Unable to preserve concurrent local edit") }
+                                        verifiedDownload(remote, path).use { input -> if (!repository.writeSyncFileIfAbsent(conflict, remote.mimeType, input)) throw IllegalStateException("Unable to preserve concurrent local edit") }
                                         conflicts++
                                     }
                                 }
                             }
                             SyncComparisonAction.CONFLICT -> {
+                                // Confirm destructive replacement can be conditional before creating any conflict copies.
+                                DriveMutationPrecondition.requireStrong(api.revision(remote.id).etag)
                                 report(completed, total, "发现冲突：$path")
                                 val stamp = conflictStamp()
                                 val remoteConflictPath = conflictPath(path, providerName, stamp)
-                                api.download(remote).use { input ->
+                                verifiedDownload(remote, path).use { input ->
                                     val saved = repository.writeSyncFileIfAbsent(remoteConflictPath, remote.mimeType, input)
                                     if (!saved) throw IllegalStateException("Unable to preserve Drive conflict copy")
                                 }
                                 val parentId = ensureRemoteFolder(path.substringBeforeLast('/', ""), remoteFolders)
+                                verifyRemoteFile(remote, path)
+                                ensureRemoteFolder(path.substringBeforeLast('/', ""), remoteFolders)
                                 api.copy(remote.id, parentId, remoteConflictPath.substringAfterLast('/'))
-                                val input = repository.openSyncInput(local) ?: throw IllegalStateException("Unable to read local file")
                                 val revision = api.revision(remote.id)
                                 val current = revision.item
-                                val currentHash = current.md5 ?: if (remoteRevisionMatches) remoteHash else md5(api.download(current))
-                                if (current.revision != remote.revision || !currentHash.equals(remoteHash, true)) throw IllegalStateException("$providerName file changed during sync")
-                                input.use { api.replace(remote.id, revision.etag, local.document.mimeType ?: "application/octet-stream", it) }
+                                val currentHash = current.md5 ?: if (remoteRevisionMatches) remoteHash else independentRemoteDigests(current, path).md5
+                                if (current.revision != remote.revision || !currentHash.equals(remoteHash, true)) throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+                                verifyRemoteFile(remote, path)
+                                val precondition = DriveMutationPrecondition.requireStrong(revision.etag)
+                                val input = repository.openSyncInput(local) ?: throw IllegalStateException("Unable to read local file")
+                                input.use { api.replace(remote.id, precondition, local.document.mimeType ?: "application/octet-stream", it) }
                                 conflicts++
                             }
                         }
@@ -363,7 +407,7 @@ class RemoteDriveSyncEngine(
             } catch (failure: Exception) {
                 Log.e("RemoteDriveSync", "File sync failed: ${failure.javaClass.simpleName}")
                 if (failure is OneDriveReloginRequired) throw failure
-                errors += "$path: ${userMessage(failure)}"
+                recordFailure(failure, path)
             }
             completed++
             report(completed, total, "已比较 $completed / $total")
@@ -385,11 +429,7 @@ class RemoteDriveSyncEngine(
                 if (failure is OneDriveReloginRequired) throw failure
                 val representativePath = change.sourceToTarget.keys.firstOrNull { it.endsWith(".md", true) }
                     ?: change.sourceToTarget.keys.firstOrNull().orEmpty()
-                errors += if (representativePath.isNotEmpty()) {
-                    "$representativePath: 本地搬运失败: ${userMessage(failure)}"
-                } else {
-                    "本地搬运 ${change.id.take(8)}: ${userMessage(failure)}"
-                }
+                recordFailure(failure, representativePath)
             }
         }
         if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
@@ -406,19 +446,19 @@ class RemoteDriveSyncEngine(
                     remoteVersion = remote.version,
                     remoteMd5 = remote.md5,
                     baseline = base,
-                    remoteHashSupplier = { md5(api.download(remote)) }
+                    remoteHashSupplier = { independentRemoteDigests(remote, path).md5 }
                 )
                 when (action) {
                     SyncRemoteOnlyAction.DOWNLOAD -> {
                         report(completed, total, "正在下载 $path")
-                        val downloadedToOriginalPath = api.download(remote).use { input ->
+                        val downloadedToOriginalPath = verifiedDownload(remote, path).use { input ->
                             repository.writeSyncFileIfAbsent(path, remote.mimeType, input)
                         }
                         if (downloadedToOriginalPath) {
                             downloaded++
                         } else {
                             val remoteConflictPath = conflictPath(path, providerName, conflictStamp())
-                            val preserved = api.download(remote).use { input ->
+                            val preserved = verifiedDownload(remote, path).use { input ->
                                 repository.writeSyncFileIfAbsent(remoteConflictPath, remote.mimeType, input)
                             }
                             if (!preserved) throw IllegalStateException("Unable to preserve remote conflict copy")
@@ -431,18 +471,22 @@ class RemoteDriveSyncEngine(
                         val revision = api.revision(remote.id)
                         val current = revision.item
                         val currentRevisionMatches = current.revision == remote.revision &&
-                            (current.version == null || remote.version == null || current.version == remote.version)
+                            current.id == remote.id &&
+                            (current.version == null || remote.version == null || current.version == remote.version) &&
+                            (current.md5 == null || current.md5.equals(remote.md5 ?: base?.remoteMd5, true))
                         if (!currentRevisionMatches) {
-                            throw IllegalStateException("$providerName file changed during sync")
+                            throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
                         }
-                        api.trash(remote.id, revision.etag)
+                        verifyRemoteFile(remote, path)
+                        val precondition = DriveMutationPrecondition.requireStrong(revision.etag)
+                        api.trash(remote.id, precondition)
                         deleted++
                     }
                 }
             } catch (failure: Exception) {
                 Log.e("RemoteDriveSync", "Remote item processing failed: ${failure.javaClass.simpleName}")
                 if (failure is OneDriveReloginRequired) throw failure
-                errors += "$path: ${userMessage(failure)}"
+                recordFailure(failure, path)
             }
             completed++
             report(completed, total, "已比较 $completed / $total")
@@ -452,7 +496,7 @@ class RemoteDriveSyncEngine(
         if (outcome.isSuccessful && baselineStore != null) {
             if (coordinator.isCancelled) return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
             val baselineSaved = try {
-                saveBaseline(root, localSnapshots)
+                saveBaseline(root, baseline)
             } catch (failure: Exception) {
                 if (failure is OneDriveReloginRequired) throw failure
                 BaselineSaveResult.FAILED
@@ -460,7 +504,8 @@ class RemoteDriveSyncEngine(
             if (baselineSaved == BaselineSaveResult.CANCELLED) {
                 return result(uploaded, downloaded, unchanged, conflicts, errors, true, deleted)
             }
-            if (baselineSaved == BaselineSaveResult.FAILED) return SyncRunResult(uploaded, downloaded, unchanged, conflicts, listOf("无法保存同步基线"), false, deleted)
+            if (baselineSaved == BaselineSaveResult.FAILED) return SyncRunResult(uploaded, downloaded, unchanged, conflicts, listOf("无法保存同步基线"), false, deleted,
+                listOf(SyncErrorDetail(SyncErrorCode.ITEM_FAILED, reason = SyncErrorReason.BASELINE_FAILED)))
             completedChangeIds.forEach { id ->
                 if (changeStore?.acknowledge(id, api.providerId) != true) return SyncRunResult(uploaded, downloaded, unchanged, conflicts, listOf("无法确认本地搬运历史"), false, deleted)
             }
@@ -468,40 +513,78 @@ class RemoteDriveSyncEngine(
         return outcome
     }
 
-    private fun saveBaseline(root: DriveVaultRoot, localSnapshots: Map<String, LocalFileSnapshot>): BaselineSaveResult {
+    /** Unproven historical fingerprints must never authorize a deletion or an unchanged shortcut. */
+    private fun validateBaseline(
+        stored: Map<String, DriveBaselineFile>,
+        remoteFiles: Map<String, DriveItem>
+    ): Map<String, DriveBaselineFile> = buildMap {
+        stored.forEach { (path, base) ->
+            if (coordinator.isCancelled) throw SyncTransferCancelled()
+            if (base.localMd5 != null && base.remoteMd5 != null && !base.localMd5.equals(base.remoteMd5, true)) {
+                return@forEach
+            }
+            if (base.contentVerified) {
+                if (base.localMd5 != null && base.remoteMd5 != null) put(path, base)
+                return@forEach
+            }
+            val remote = remoteFiles[path] ?: return@forEach
+            if (!sameRemoteRevision(base, remote)) return@forEach
+            val digests = independentRemoteDigests(remote, path)
+            val current = api.revision(remote.id).item
+            if (current.id != remote.id || current.revision != remote.revision ||
+                (current.md5 != null && !current.md5.equals(digests.md5, true))) {
+                throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+            }
+            if (base.localSha256.equals(digests.sha256, true)) {
+                put(path, base.copy(localMd5 = digests.md5, remoteMd5 = digests.md5, contentVerified = true))
+            }
+        }
+    }
+
+    private fun sameRemoteRevision(base: DriveBaselineFile, remote: DriveItem): Boolean =
+        base.remoteId == remote.id && remote.revision != null &&
+            (base.remoteRevision ?: base.remoteVersion?.toString()) == remote.revision
+
+    private fun saveBaseline(root: DriveVaultRoot, previous: Map<String, DriveBaselineFile>): BaselineSaveResult {
         if (coordinator.isCancelled) return BaselineSaveResult.CANCELLED
         val local = repository.syncFilesStrict().associateBy { it.relativePath }
         if (coordinator.isCancelled) return BaselineSaveResult.CANCELLED
         val remoteFiles = linkedMapOf<String, DriveItem>()
         val folders = linkedMapOf("" to root.id)
         if (!scanRemote(root.id, "", remoteFiles, folders)) return BaselineSaveResult.CANCELLED
+        if (folderIdentities.any { (path, id) -> folders[path] != id }) return BaselineSaveResult.FAILED
+        if (local.keys != remoteFiles.keys) return BaselineSaveResult.FAILED
         val files = buildMap {
             local.forEach { (path, file) ->
                 if (coordinator.isCancelled) return BaselineSaveResult.CANCELLED
-                val remote = remoteFiles[path] ?: return@forEach
-                val snapshot = localSnapshots[path]
-                val (digests, mtime, size) = if (snapshot != null &&
-                    snapshot.lastModified == file.document.lastModified &&
-                    snapshot.size == file.document.size
-                ) {
-                    Triple(snapshot.digests, snapshot.lastModified, snapshot.size)
+                val remote = remoteFiles.getValue(path)
+                // SAF timestamps and sizes are not proof: same-size edits can retain both.
+                val digests = LocalFileDigestsCalculator.computeDigests(repository.openSyncInput(file))
+                    ?: return BaselineSaveResult.FAILED
+                val base = previous[path]
+                val remoteHash = remote.md5 ?: if (base?.contentVerified == true && sameRemoteRevision(base, remote)) {
+                    base.remoteMd5
                 } else {
-                    val fresh = LocalFileDigestsCalculator.computeDigests(repository.openSyncInput(file))
-                        ?: return@forEach
-                    Triple(fresh, file.document.lastModified, file.document.size)
+                    val hash = independentRemoteDigests(remote, path).md5
+                    val current = api.revision(remote.id).item
+                    if (remote.revision == null || current.id != remote.id || current.revision != remote.revision ||
+                        (current.md5 != null && !current.md5.equals(hash, true))) return BaselineSaveResult.FAILED
+                    hash
                 }
+                if (remoteHash == null || !digests.md5.equals(remoteHash, true)) return BaselineSaveResult.FAILED
                 val sha = digests.sha256
                 val localMd5 = digests.md5
                 put(path, DriveBaselineFile(
                     path = path,
                     localSha256 = sha,
                     remoteId = remote.id,
-                    remoteMd5 = remote.md5 ?: localMd5,
+                    remoteMd5 = remoteHash,
                     remoteVersion = remote.version,
                     localMd5 = localMd5,
-                    localLastModified = mtime,
-                    localSize = size,
-                    remoteRevision = remote.revision
+                    localLastModified = file.document.lastModified,
+                    localSize = file.document.size,
+                    remoteRevision = remote.revision,
+                    contentVerified = true
                 ))
             }
         }
@@ -538,6 +621,9 @@ class RemoteDriveSyncEngine(
         val refreshedFiles = linkedMapOf<String, DriveItem>()
         val refreshedFolders = linkedMapOf("" to root.id)
         if (!scanRemote(root.id, "", refreshedFiles, refreshedFolders)) throw SyncTransferCancelled()
+        if (folderIdentities.any { (path, id) -> refreshedFolders[path] != id }) {
+            throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED)
+        }
         folders.putAll(refreshedFolders)
 
         val targetsToVerify = MoveTargetVerificationPolicy.targetsToVerify(
@@ -551,17 +637,16 @@ class RemoteDriveSyncEngine(
             val local = localFiles[target] ?: throw IllegalStateException("Move target is missing locally")
             val remote = refreshedFiles[target] ?: throw IllegalStateException("Move target was not uploaded")
             val localHash = md5(repository.openSyncInput(local)) ?: throw IllegalStateException("Move target is unreadable")
-            val remoteHash = remote.md5 ?: md5(api.download(remote))
+            val remoteHash = remote.md5 ?: independentRemoteDigests(remote, target).md5
             if (!localHash.equals(remoteHash, true)) throw IllegalStateException("Move target verification failed")
         }
         change.sourceToTarget.keys.forEach { source ->
             if (localFiles.containsKey(source)) return@forEach
             val remote = refreshedFiles[source] ?: return@forEach
-            val actual = remote.md5 ?: md5(api.download(remote))
+            val actual = remote.md5 ?: independentRemoteDigests(remote, source).md5
             val base = baseline[source]
             val baselineMatches = if (base == null) {
-                val actualSha256 = sha256(api.download(remote))
-                    ?: throw IllegalStateException("Move source is unreadable")
+                val actualSha256 = independentRemoteDigests(remote, source).sha256
                 when (MoveAdoptionPolicy.decide(change.beforeSha256[source], actualSha256)) {
                     MoveAdoptionDecision.MISSING_FINGERPRINT -> throw IllegalStateException("Move source has no adoption fingerprint")
                     MoveAdoptionDecision.UNCHANGED_SOURCE -> Unit
@@ -569,7 +654,7 @@ class RemoteDriveSyncEngine(
                     val conflict = conflictPath(source, providerName, change.id.take(8))
                     val existingLocalConflict = localFiles[conflict]
                     if (existingLocalConflict == null) {
-                        val saved = api.download(remote).use { input ->
+                        val saved = verifiedDownload(remote, source).use { input ->
                             repository.writeSyncFileIfAbsent(conflict, remote.mimeType, input)
                         }
                         if (!saved) throw IllegalStateException("Unable to preserve adopted move conflict locally")
@@ -583,9 +668,11 @@ class RemoteDriveSyncEngine(
                     val parent = ensureRemoteFolder(conflict.substringBeforeLast('/', ""), folders)
                     val existingRemoteConflict = refreshedFiles[conflict]
                     if (existingRemoteConflict == null) {
+                        verifyRemoteFile(remote, source)
+                        ensureRemoteFolder(conflict.substringBeforeLast('/', ""), folders)
                         api.copy(remote.id, parent, conflict.substringAfterLast('/'))
                     } else {
-                        val existingHash = existingRemoteConflict.md5 ?: md5(api.download(existingRemoteConflict))
+                        val existingHash = existingRemoteConflict.md5 ?: independentRemoteDigests(existingRemoteConflict, conflict).md5
                         if (!existingHash.equals(actual, true)) throw IllegalStateException("Adopted move remote conflict path is occupied")
                     }
                     preservedAdoptionConflict = true
@@ -600,14 +687,20 @@ class RemoteDriveSyncEngine(
             if (!baselineMatches) {
                 val conflict = conflictPath(source, providerName, change.id.take(8))
                 val parent = ensureRemoteFolder(conflict.substringBeforeLast('/', ""), folders)
-                if (refreshedFiles[conflict] == null) api.copy(remote.id, parent, conflict.substringAfterLast('/'))
+                if (refreshedFiles[conflict] == null) {
+                    verifyRemoteFile(remote, source)
+                    ensureRemoteFolder(conflict.substringBeforeLast('/', ""), folders)
+                    api.copy(remote.id, parent, conflict.substringAfterLast('/'))
+                }
                 throw IllegalStateException("Move source changed remotely or has no successful baseline")
             }
             val revision = api.revision(remote.id)
             val current = revision.item
-            val currentHash = current.md5 ?: md5(api.download(current))
-            if (current.revision != remote.revision || !currentHash.equals(actual, true)) throw IllegalStateException("$providerName source changed during sync")
-            api.trash(remote.id, revision.etag)
+            val currentHash = current.md5 ?: independentRemoteDigests(current, source).md5
+            if (current.revision != remote.revision || !currentHash.equals(actual, true)) throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, source)
+            verifyRemoteFile(remote, source)
+            val precondition = DriveMutationPrecondition.requireStrong(revision.etag)
+            api.trash(remote.id, precondition)
         }
         val afterFiles = linkedMapOf<String, DriveItem>()
         val afterFolders = linkedMapOf("" to root.id)
@@ -619,6 +712,78 @@ class RemoteDriveSyncEngine(
 
     private enum class MoveApplyResult { COMPLETED, COMPLETED_WITH_CONFLICT }
 
+    private fun verifyRoot() {
+        if (coordinator.isCancelled) throw SyncTransferCancelled()
+        val root = api.revision(selectedRootId).item
+        if (root.id != selectedRootIdentity || !api.isFolder(root)) {
+            throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED)
+        }
+    }
+
+    private fun verifyRemoteFile(expected: DriveItem, path: String): DriveItem {
+        verifyRoot()
+        if (expected.revision == null) throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+        val parts = path.split('/')
+        if (parts.any { it.isBlank() || it == "." || it == ".." || it.contains('\\') }) {
+            throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS, path)
+        }
+        var parent = selectedRootId
+        var prefix = ""
+        for ((index, name) in parts.withIndex()) {
+            val matches = api.listChildren(parent).filter { it.name == name }
+            if (matches.size > 1) throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS, path)
+            val item = matches.singleOrNull() ?: throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+            prefix = join(prefix, name)
+            if (index < parts.lastIndex) {
+                if (!api.isFolder(item) || folderIdentities[prefix] != item.id) {
+                    throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+                }
+                parent = item.id
+            } else if (api.isFolder(item) || item.id != expected.id) {
+                throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+            }
+        }
+        val current = api.revision(expected.id).item
+        if (current.id != expected.id || current.revision != expected.revision ||
+            (expected.md5 != null && current.md5 != null && !expected.md5.equals(current.md5, true))) {
+            throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+        }
+        return current
+    }
+
+    private fun independentRemoteDigests(remote: DriveItem, path: String): LocalFileDigests {
+        verifyRemoteFile(remote, path)
+        val digests = LocalFileDigestsCalculator.computeDigests(
+            CancellationInputStream(api.download(remote)) { coordinator.isCancelled }
+        ) ?: throw SyncOperationException(SyncErrorReason.CONTENT_MISMATCH, path)
+        if (remote.md5 != null && !remote.md5.equals(digests.md5, true)) {
+            throw SyncOperationException(SyncErrorReason.CONTENT_MISMATCH, path)
+        }
+        val current = verifyRemoteFile(remote, path)
+        if (current.md5 != null && !current.md5.equals(digests.md5, true)) {
+            throw SyncOperationException(SyncErrorReason.CONTENT_MISMATCH, path)
+        }
+        sourceDigests[sourceKey(remote, path)] = digests
+        return digests
+    }
+
+    private fun sourceKey(remote: DriveItem, path: String) = "${remote.id}\u0000${remote.revision}\u0000$path"
+
+    private fun verifiedDownload(remote: DriveItem, path: String): InputStream {
+        verifyRemoteFile(remote, path)
+        val independent = if (remote.md5 == null) {
+            sourceDigests[sourceKey(remote, path)] ?: independentRemoteDigests(remote, path)
+        } else null
+        val expectedHash = remote.md5 ?: independent!!.md5
+        return VerifiedRemoteInputStream(api.download(remote), expectedHash,
+            independent?.sha256, path, { coordinator.isCancelled }) {
+            val current = verifyRemoteFile(remote, path)
+            if (current.md5 != null && !current.md5.equals(expectedHash, true)) {
+                throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+            }
+        }
+    }
+
     private fun scanRemote(
         parentId: String,
         prefix: String,
@@ -626,7 +791,17 @@ class RemoteDriveSyncEngine(
         folders: MutableMap<String, String>
     ): Boolean {
         if (coordinator.isCancelled) return false
-        api.listChildren(parentId).forEach { item ->
+        val children = api.listChildren(parentId).filter { item ->
+            val allowed = remotePathAllowed(join(prefix, item.name), api.isFolder(item)) && (api.isFolder(item) || api.shouldSync(item))
+            if (allowed && (item.name.contains('/') || item.name.contains('\\'))) {
+                throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS, prefix)
+            }
+            allowed
+        }
+        if (children.groupBy { it.name }.any { it.value.size > 1 }) {
+            throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS, prefix)
+        }
+        children.forEach { item ->
             if (coordinator.isCancelled) return false
             val path = join(prefix, item.name)
             if (!remotePathAllowed(path, api.isFolder(item))) return@forEach
@@ -635,7 +810,7 @@ class RemoteDriveSyncEngine(
                 if (!scanRemote(item.id, path, files, folders)) return false
             } else if (api.shouldSync(item)) {
                 if (files.put(path, item) != null) {
-                    throw DriveApiException("$providerName contains duplicate paths; rename one before syncing")
+                    throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS, path)
                 }
             }
         }
@@ -649,21 +824,36 @@ class RemoteDriveSyncEngine(
     ) {
         val parentPath = path.substringBeforeLast('/', "")
         val parentId = ensureRemoteFolder(parentPath, folders)
-        val input = repository.openSyncInput(local) ?: throw IllegalStateException("Unable to read local file")
+        val input = repository.openSyncInput(local) ?: throw SyncOperationException(SyncErrorReason.LOCAL_READ_FAILED, path)
         input.use { api.upload(parentId, path.substringAfterLast('/'), local.document.mimeType ?: "application/octet-stream", it) }
     }
 
     private fun ensureRemoteFolder(path: String, folders: MutableMap<String, String>): String {
-        folders[path]?.let { return it }
-        val parentPath = path.substringBeforeLast('/', "")
-        val parent = ensureRemoteFolder(parentPath, folders)
-        val name = path.substringAfterLast('/')
-        val existing = api.listChildren(parent).firstOrNull {
-            it.name == name && api.isFolder(it)
+        verifyRoot()
+        var parent = selectedRootId
+        var prefix = ""
+        for (name in path.split('/').filter { it.isNotBlank() }) {
+            prefix = join(prefix, name)
+            val matches = api.listChildren(parent).filter { it.name == name }
+            if (matches.size > 1 || matches.any { !api.isFolder(it) }) throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS, path)
+            val cached = folderIdentities[prefix]
+            var item = matches.singleOrNull()
+            if (cached != null && item?.id != cached) throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+            if (cached == null && item != null) throw SyncOperationException(SyncErrorReason.REMOTE_CHANGED, path)
+            if (item == null) {
+                val created = api.createFolder(parent, name)
+                val confirmed = api.listChildren(parent).filter { it.name == name }
+                if (created.name != name || !api.isFolder(created) || confirmed.size != 1 ||
+                    confirmed.single().id != created.id || !api.isFolder(confirmed.single())) {
+                    throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS, path)
+                }
+                item = confirmed.single()
+                folderIdentities[prefix] = item.id
+            }
+            folders[prefix] = item.id
+            parent = item.id
         }
-        val id = (existing ?: api.createFolder(parent, name)).id
-        folders[path] = id
-        return id
+        return parent
     }
 
     private fun md5(input: InputStream?): String? {
@@ -719,10 +909,6 @@ class RemoteDriveSyncEngine(
         uploaded: Int, downloaded: Int, unchanged: Int, conflicts: Int, errors: List<String>, cancelled: Boolean, deleted: Int = 0
     ) = SyncRunResult(uploaded, downloaded, unchanged, conflicts, errors, cancelled, deleted)
 
-    private fun userMessage(failure: Exception): String = when (failure) {
-        is DriveApiException -> failure.message ?: "$providerName request failed"
-        else -> failure.message?.takeIf { it.isNotBlank() } ?: "无法完成此文件"
-    }
 }
 
 typealias GoogleDriveSyncService = RemoteDriveSyncEngine

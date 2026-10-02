@@ -118,6 +118,7 @@ class BackgroundSyncService : Service() {
     }
 
     private fun startGoogleDriveSync(startId: Int, intent: Intent) {
+        if (rejectWhileRunning(intent, GOOGLE_DRIVE_PROVIDER, "Google Drive")) return
         val rootId = intent.getStringExtra(EXTRA_ROOT_ID)
         val rootName = intent.getStringExtra(EXTRA_ROOT_NAME)
         val expectedAccountId = intent.getStringExtra(EXTRA_ACCOUNT_ID)
@@ -126,7 +127,7 @@ class BackgroundSyncService : Service() {
             DriveSyncStartRequest(vault.toString(), expectedAccountId, DriveVaultRoot(rootId, rootName))
         } else null
         if (request == null) {
-            recordStartFailure(GOOGLE_DRIVE_PROVIDER, "Google Drive", getString(R.string.drive_sync_selection_missing), vault?.toString().orEmpty(), rootName.orEmpty())
+            recordStartFailure(GOOGLE_DRIVE_PROVIDER, "Google Drive", vault?.toString().orEmpty(), rootName.orEmpty())
             stopSelf(startId)
             return
         }
@@ -139,13 +140,13 @@ class BackgroundSyncService : Service() {
             auth.isAuthorized(account)
         ))
         if (decision is DriveSyncStartDecision.Rejected) {
-            recordStartFailure(GOOGLE_DRIVE_PROVIDER, "Google Drive", getString(R.string.drive_sync_tuple_changed), request.vaultId, request.root.name)
+            recordStartFailure(GOOGLE_DRIVE_PROVIDER, "Google Drive", request.vaultId, request.root.name, SyncErrorReason.AUTH_REQUIRED)
             stopSelf(startId)
             return
         }
         val lease = VaultMutationLease.tryAcquire(request.vaultId, VaultMutationLease.Kind.SYNC)
         if (lease == null) {
-            recordStartFailure(GOOGLE_DRIVE_PROVIDER, "Google Drive", getString(R.string.drive_sync_vault_busy), request.vaultId, request.root.name)
+            recordStartFailure(GOOGLE_DRIVE_PROVIDER, "Google Drive", request.vaultId, request.root.name, SyncErrorReason.SYNC_BUSY)
             stopSelf(startId)
             return
         }
@@ -153,7 +154,7 @@ class BackgroundSyncService : Service() {
         val started = stateStore.begin(GOOGLE_DRIVE_PROVIDER, "Google Drive", root.name, request.vaultId)
         if (started == null) {
             VaultMutationLease.release(lease)
-            stateStore.snapshot()?.let(::showOngoingNotification)
+            recordStartFailure(GOOGLE_DRIVE_PROVIDER, "Google Drive", request.vaultId, root.name, SyncErrorReason.SYNC_BUSY)
             return
         }
         coordinator.reset()
@@ -173,9 +174,10 @@ class BackgroundSyncService : Service() {
     }
 
     private fun startOneDriveSync(startId: Int, intent: Intent) {
+        if (rejectWhileRunning(intent, ONEDRIVE_PROVIDER, "OneDrive")) return
         val request = syncRequest(intent)
         if (request == null) {
-            recordStartFailure(ONEDRIVE_PROVIDER, "OneDrive", getString(R.string.onedrive_sync_selection_missing))
+            recordStartFailure(ONEDRIVE_PROVIDER, "OneDrive", intent.getStringExtra(EXTRA_VAULT_URI).orEmpty(), intent.getStringExtra(EXTRA_ROOT_NAME).orEmpty())
             stopSelf(startId)
             return
         }
@@ -184,20 +186,20 @@ class BackgroundSyncService : Service() {
             OneDriveSyncPreferences(this).binding(request.vaultId)
         )
         if (OneDriveSyncStartPolicy.validate(request, context) is DriveSyncStartDecision.Rejected) {
-            recordStartFailure(ONEDRIVE_PROVIDER, "OneDrive", getString(R.string.onedrive_sync_tuple_changed), request.vaultId, request.root.name)
+            recordStartFailure(ONEDRIVE_PROVIDER, "OneDrive", request.vaultId, request.root.name, SyncErrorReason.AUTH_REQUIRED)
             stopSelf(startId)
             return
         }
         val lease = VaultMutationLease.tryAcquire(request.vaultId, VaultMutationLease.Kind.SYNC)
         if (lease == null) {
-            recordStartFailure(ONEDRIVE_PROVIDER, "OneDrive", getString(R.string.drive_sync_vault_busy), request.vaultId, request.root.name)
+            recordStartFailure(ONEDRIVE_PROVIDER, "OneDrive", request.vaultId, request.root.name, SyncErrorReason.SYNC_BUSY)
             stopSelf(startId)
             return
         }
         val started = stateStore.begin(ONEDRIVE_PROVIDER, "OneDrive", request.root.name, request.vaultId)
         if (started == null) {
             VaultMutationLease.release(lease)
-            stateStore.snapshot()?.let(::showOngoingNotification)
+            recordStartFailure(ONEDRIVE_PROVIDER, "OneDrive", request.vaultId, request.root.name, SyncErrorReason.SYNC_BUSY)
             return
         }
         coordinator.reset()
@@ -256,10 +258,12 @@ class BackgroundSyncService : Service() {
     } catch (e: OneDriveReloginRequired) {
         Log.w(TAG, "OneDrive sync requires re-login")
         OneDriveSyncPreferences(this).markReloginRequired(request.vaultId)
-        SyncRunResult(0, 0, 0, 0, listOf(getString(R.string.onedrive_account_relogin_required)), false)
+        SyncRunResult(0, 0, 0, 0, listOf("AUTH_REQUIRED"), false,
+            errorDetails = listOf(SyncFailurePolicy.fromException(e)))
     } catch (e: Exception) {
         Log.e(TAG, "OneDrive sync failed: ${e.javaClass.simpleName}")
-        SyncRunResult(0, 0, 0, 0, listOf(getString(R.string.onedrive_sync_connection_failed)), false)
+        SyncRunResult(0, 0, 0, 0, listOf("SYNC_FAILED"), false,
+            errorDetails = listOf(SyncFailurePolicy.fromException(e)))
     }
 
     private fun runGoogleDriveSync(request: DriveSyncStartRequest): DriveSyncResult = try {
@@ -272,7 +276,8 @@ class BackgroundSyncService : Service() {
             auth.isAuthorized(account)
         ))
         if (decision is DriveSyncStartDecision.Rejected || account == null) {
-            DriveSyncResult(0, 0, 0, 0, listOf(getString(R.string.drive_account_relogin_required)), false)
+            DriveSyncResult(0, 0, 0, 0, listOf("AUTH_REQUIRED"), false,
+                errorDetails = listOf(SyncErrorDetail(SyncErrorCode.ITEM_FAILED, reason = SyncErrorReason.AUTH_REQUIRED)))
         } else {
             GoogleDriveSyncService(
                 VaultRepository(this, android.net.Uri.parse(request.vaultId)),
@@ -288,14 +293,23 @@ class BackgroundSyncService : Service() {
         }
     } catch (e: Exception) {
         Log.e(TAG, "Google Drive sync failed: ${e.javaClass.simpleName}")
-        DriveSyncResult(0, 0, 0, 0, listOf(getString(R.string.drive_sync_connection_failed)), false)
+        DriveSyncResult(0, 0, 0, 0, listOf("SYNC_FAILED"), false,
+            errorDetails = listOf(SyncFailurePolicy.fromException(e)))
     }
 
-    private fun recordStartFailure(providerId: String, providerName: String, message: String, vaultId: String = "", targetName: String = "") {
+    private fun rejectWhileRunning(intent: Intent, providerId: String, providerName: String): Boolean {
+        if (stateStore.snapshot()?.isRunning != true) return false
+        recordStartFailure(providerId, providerName, intent.getStringExtra(EXTRA_VAULT_URI).orEmpty(),
+            intent.getStringExtra(EXTRA_ROOT_NAME).orEmpty(), SyncErrorReason.SYNC_BUSY)
+        return true
+    }
+
+    private fun recordStartFailure(providerId: String, providerName: String, vaultId: String = "", targetName: String = "",
+                                   reason: SyncErrorReason = SyncErrorReason.UNKNOWN) {
         val target = targetName.ifBlank { getString(R.string.drive_target_unselected) }
-        val started = stateStore.begin(providerId, providerName, target, vaultId) ?: return
-        val final = stateStore.finish(DriveSyncResult(0, 0, 0, 0, listOf(message), false)) ?: started
-        showFinishedNotification(final)
+        val final = stateStore.rejectStart(providerId, providerName, target, vaultId, reason)
+        // Do not replace the ongoing foreground notification for the original run.
+        notifications.notify(REJECTION_NOTIFICATION_ID, notification(final, ongoing = false))
     }
 
     private fun showOngoingNotification(snapshot: SyncTaskSnapshot) {
@@ -352,6 +366,7 @@ class BackgroundSyncService : Service() {
         private const val ONEDRIVE_PROVIDER = "onedrive"
         private const val CHANNEL_ID = "heji_notes_sync_status"
         private const val NOTIFICATION_ID = 2301
+        private const val REJECTION_NOTIFICATION_ID = 2302
         private const val ACTION_START_GOOGLE_DRIVE = "com.jambus.heji.action.START_GOOGLE_DRIVE_SYNC"
         private const val ACTION_START_ONEDRIVE = "com.jambus.heji.action.START_ONEDRIVE_SYNC"
         private const val ACTION_CANCEL = "com.jambus.heji.action.CANCEL_SYNC"

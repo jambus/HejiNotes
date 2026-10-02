@@ -1800,44 +1800,7 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
 
     /** Writes a downloaded file with the same recoverable replace protocol as note saving. */
     override fun writeSyncFile(relativePath: String, mimeType: String?, input: InputStream, expectedCurrentMd5: String?): Boolean {
-        val cleanPath = safeSyncPath(relativePath) ?: return false
-        val tree = savedVaultUri() ?: return false
-        val parts = cleanPath.split('/')
-        val name = parts.last()
-        val parent = findOrCreateDirectory(tree, parts.dropLast(1)) ?: return false
-        val temp = DocumentsContract.createDocument(
-            resolver,
-            parent,
-            mimeType?.takeIf { it.isNotBlank() } ?: "application/octet-stream",
-            ".markbook-${UUID.randomUUID()}.tmp"
-        ) ?: return false
-        var backup: Uri? = null
-        return try {
-            resolver.openOutputStream(temp, "wt")?.use { output -> copyStream(input, output) }
-                ?: throw IllegalStateException("Unable to write downloaded file")
-            val existing = findChild(tree, parent, name)
-            if (expectedCurrentMd5 != null) {
-                val current = existing?.let { resolver.openInputStream(it.uri)?.use(::md5) }
-                if (!expectedCurrentMd5.equals(current, true)) throw IllegalStateException("Local file changed during sync")
-            }
-            if (existing != null) {
-                backup = DocumentsContract.renameDocument(
-                    resolver,
-                    existing.uri,
-                    ".markbook-$name.bak"
-                )
-                if (backup == null) throw IllegalStateException("Unable to protect existing file")
-            }
-            if (DocumentsContract.renameDocument(resolver, temp, name) == null) {
-                throw IllegalStateException("Unable to commit downloaded file")
-            }
-            backup?.let { uri -> try { DocumentsContract.deleteDocument(resolver, uri) } catch (_: Exception) { } }
-            true
-        } catch (_: Exception) {
-            try { backup?.let { DocumentsContract.renameDocument(resolver, it, name) } } catch (_: Exception) { }
-            try { DocumentsContract.deleteDocument(resolver, temp) } catch (_: Exception) { }
-            false
-        }
+        return writeVerifiedSyncDownload(relativePath, mimeType, input, false, expectedCurrentMd5)
     }
 
     /**
@@ -1845,30 +1808,102 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
      * This deliberately fails closed: the caller must keep the remote version as a conflict copy.
      */
     override fun writeSyncFileIfAbsent(relativePath: String, mimeType: String?, input: InputStream): Boolean {
-        val cleanPath = safeSyncPath(relativePath) ?: return false
-        val tree = savedVaultUri() ?: return false
-        val parts = cleanPath.split('/')
-        val name = parts.last()
-        val parent = findOrCreateDirectory(tree, parts.dropLast(1)) ?: return false
-        if (findChild(tree, parent, name) != null) return false
-        val temp = DocumentsContract.createDocument(
-            resolver,
-            parent,
-            mimeType?.takeIf { it.isNotBlank() } ?: "application/octet-stream",
-            ".markbook-${UUID.randomUUID()}.tmp"
-        ) ?: return false
-        return try {
-            resolver.openOutputStream(temp, "wt")?.use { output -> copyStream(input, output) }
-                ?: throw IllegalStateException("Unable to write downloaded file")
-            // Check immediately before final rename so a concurrently created or saved local note wins.
-            if (findChild(tree, parent, name) != null) throw IllegalStateException("Local file changed during sync")
-            if (DocumentsContract.renameDocument(resolver, temp, name) == null) {
-                throw IllegalStateException("Unable to commit downloaded file")
+        return writeVerifiedSyncDownload(relativePath, mimeType, input, true)
+    }
+
+    private fun writeVerifiedSyncDownload(path: String, mimeType: String?, input: InputStream, absent: Boolean, expectedMd5: String? = null): Boolean {
+        val clean = safeSyncPath(path) ?: throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS)
+        val tree = savedVaultUri() ?: throw SyncOperationException(SyncErrorReason.PERMISSION_DENIED, clean)
+        try {
+            val parts = clean.split('/')
+            var parent = rootDocument(tree)
+            var parentPath = ""
+            val ancestorIds = mutableListOf<Uri>()
+            fun unique(directory: Uri, prefix: String, name: String): VaultDocument? {
+                val matches = listChildrenStrict(tree, directory, prefix).filter { it.name == name }
+                if (matches.size > 1) throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS, clean)
+                return matches.singleOrNull()
             }
-            true
+            fun resolve(directory: Uri, prefix: String, uri: Uri): VaultDocument {
+                val matches = listChildrenStrict(tree, directory, prefix).filter { it.uri == uri }
+                return matches.singleOrNull() ?: throw SyncOperationException(SyncErrorReason.COMMIT_UNCERTAIN, clean)
+            }
+            for (part in parts.dropLast(1)) {
+                val existing = unique(parent, parentPath, part)
+                val child = existing ?: run {
+                    val created = DocumentsContract.createDocument(resolver, parent, DocumentsContract.Document.MIME_TYPE_DIR, part)
+                        ?: throw SyncOperationException(SyncErrorReason.LOCAL_WRITE_FAILED, clean)
+                    resolve(parent, parentPath, created)
+                }
+                if (child.name != part || !isDirectory(child) || unique(parent, parentPath, part)?.uri != child.uri) {
+                    throw SyncOperationException(SyncErrorReason.PATH_AMBIGUOUS, clean)
+                }
+                parent = child.uri
+                ancestorIds += child.uri
+                parentPath = child.relativePath
+            }
+            val directory = parent
+            val prefix = parentPath
+            fun validateParent() {
+                var current = rootDocument(tree)
+                var location = ""
+                for ((index, part) in parts.dropLast(1).withIndex()) {
+                    val child = unique(current, location, part)
+                        ?: throw SyncOperationException(SyncErrorReason.COMMIT_UNCERTAIN, clean)
+                    if (!isDirectory(child) || child.uri != ancestorIds[index] || child.name != part) {
+                        throw SyncOperationException(SyncErrorReason.COMMIT_UNCERTAIN, clean)
+                    }
+                    current = child.uri
+                    location = child.relativePath
+                }
+                if (current != directory || location != prefix) throw SyncOperationException(SyncErrorReason.COMMIT_UNCERTAIN, clean)
+            }
+            fun descriptor(document: VaultDocument) = SyncDownloadDocument(
+                document.uri.toString(), document.name, document.relativePath, isDirectory(document)
+            )
+            val backend = object : SyncDownloadBackend {
+                override fun <T> commit(action: () -> T): T = VaultSaveLock.withLock(action)
+                override fun validateLocation() = validateParent()
+                override fun find(name: String): SyncDownloadDocument? {
+                    validateParent()
+                    return unique(directory, prefix, name)?.let(::descriptor)
+                }
+                override fun create(name: String, mimeType: String?): SyncDownloadDocument {
+                    validateParent()
+                    val uri = DocumentsContract.createDocument(resolver, directory, mimeType?.takeIf { it.isNotBlank() } ?: "application/octet-stream", name)
+                        ?: throw SyncOperationException(SyncErrorReason.LOCAL_WRITE_FAILED, clean)
+                    return descriptor(resolve(directory, prefix, uri))
+                }
+                override fun output(document: SyncDownloadDocument): OutputStream =
+                    resolver.openOutputStream(Uri.parse(document.id), "wt")
+                        ?: throw SyncOperationException(SyncErrorReason.LOCAL_WRITE_FAILED, clean)
+                override fun digests(document: SyncDownloadDocument): LocalFileDigests = try {
+                    LocalFileDigestsCalculator.computeDigests(resolver.openInputStream(Uri.parse(document.id)))
+                        ?: throw SyncOperationException(SyncErrorReason.LOCAL_READ_FAILED, clean)
+                } catch (_: SecurityException) {
+                    throw SyncOperationException(SyncErrorReason.PERMISSION_DENIED, clean)
+                } catch (_: Exception) {
+                    throw SyncOperationException(SyncErrorReason.LOCAL_READ_FAILED, clean)
+                }
+                override fun rename(document: SyncDownloadDocument, name: String): SyncDownloadDocument? {
+                    validateParent()
+                    return DocumentsContract.renameDocument(resolver, Uri.parse(document.id), name)?.let { descriptor(resolve(directory, prefix, it)) }
+                }
+                override fun delete(document: SyncDownloadDocument): Boolean {
+                    validateParent()
+                    if (unique(directory, prefix, document.name)?.uri?.toString() != document.id) {
+                        throw SyncOperationException(SyncErrorReason.COMMIT_UNCERTAIN, clean)
+                    }
+                    return DocumentsContract.deleteDocument(resolver, Uri.parse(document.id))
+                }
+            }
+            return VerifiedSyncDownload.write(backend, clean, mimeType, input, UUID.randomUUID().toString(), absent, expectedMd5)
+        } catch (failure: SyncOperationException) {
+            throw failure
+        } catch (_: SecurityException) {
+            throw SyncOperationException(SyncErrorReason.PERMISSION_DENIED, clean)
         } catch (_: Exception) {
-            try { DocumentsContract.deleteDocument(resolver, temp) } catch (_: Exception) { }
-            false
+            throw SyncOperationException(SyncErrorReason.LOCAL_WRITE_FAILED, clean)
         }
     }
 

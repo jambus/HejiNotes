@@ -10,6 +10,22 @@ import java.util.concurrent.atomic.AtomicBoolean
 class GoogleDriveBaselineReuseTest {
 
     @Test
+    fun `metadata hash change overrides revision unchanged shortcut`() {
+        val base = DriveBaselineFile(
+            path = "doc.md", localSha256 = "old-sha", remoteId = "item-doc",
+            remoteMd5 = "old-md5", remoteVersion = null, localMd5 = "old-md5",
+            remoteRevision = "rev-1", contentVerified = true
+        )
+        val result = SyncItemComparisonPolicy.evaluate(
+            localMd5 = "old-md5", localSha256 = "old-sha", remoteMd5 = "new-md5",
+            remoteId = "item-doc", remoteRevision = "rev-1", baseline = base,
+            remoteHashSupplier = { throw IllegalStateException("Metadata already supplied the hash") }
+        )
+        assertEquals(SyncComparisonAction.DOWNLOAD_REMOTE_UPDATE, result.action)
+        assertFalse(result.remoteRevisionMatches)
+    }
+
+    @Test
     fun `always invokes fallback computation for attachments to prevent missed syncs`() {
         val cached = DriveBaselineFile(
             path = "notes/large_attachment.jpg",

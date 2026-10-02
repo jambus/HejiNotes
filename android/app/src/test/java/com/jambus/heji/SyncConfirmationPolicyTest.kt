@@ -29,4 +29,14 @@ class SyncConfirmationPolicyTest {
         val running = snapshot("google_drive", SyncTaskStatus.RUNNING)
         assertTrue(SyncConfirmationPolicy.shouldShowResult(running, running))
     }
+
+    @Test fun `preflight blocks another vault using global state for either provider`() {
+        for (provider in listOf("google_drive", "onedrive")) {
+            val global = snapshot(provider, SyncTaskStatus.RUNNING)
+            assertTrue(SyncConfirmationPolicy.shouldRejectCrossVaultStart(global, "other-vault"))
+            assertFalse(SyncConfirmationPolicy.shouldRejectCrossVaultStart(global, "vault-key"))
+            assertFalse(SyncConfirmationPolicy.shouldRejectCrossVaultStart(global.copy(status = SyncTaskStatus.FAILED), "other-vault"))
+            assertFalse(SyncConfirmationPolicy.shouldRejectCrossVaultStart(null, "other-vault"))
+        }
+    }
 }
