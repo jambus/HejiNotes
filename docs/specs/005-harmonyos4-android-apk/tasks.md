@@ -1,5 +1,14 @@
 # Tasks: HarmonyOS 4 Android APK
 
+## 状态口径（2026-10-02 核对）
+
+`[x]` 仅表示该条目约定的实现/自动化工作已完成，不代表真机验收或发布。
+设备任务独立保留；没有完整证据的组合任务继续未勾选，但只列剩余工作。
+本次只读核对源码、现有 JUnit XML、APK metadata/校验值及发布记录，未重新运行构建。
+当前开发包为 `0.6.5`（17），46 suites / 363 tests 的现有报告全通过，APK 校验值匹配
+release notes；最近有覆盖安装记录的是 `0.6.2`（14），不能当作当前包的设备验收。
+稳定版收口顺序与跨文档任务入口见 `008/tasks.md`；已完成项保留编号和历史证据。
+
 ## 工程基线
 
 - [x] 0.6.3（15）同步复审边界修复与 fresh 单测/APK 由 `008` T849–T854 统一记录；360 项测试通过，本包未安装，实际云盘/SAF/UI 仍需 Mate 验收。
@@ -7,7 +16,7 @@
 - [x] 0.6.2（14）恢复原调试签名，重跑全套单测/fresh APK 并覆盖安装到 Mate；340 项测试通过，证书一致，`adb install -r` Success。实际云盘/SAF/UI 验收仍按 `008` 分别记录。
 
 - [x] 修复 Google Drive / OneDrive 启动后按钮状态滞后；新增 5 项确认状态/订阅测试，0.6.1（13）完整 281 项测试与 APK 构建通过。
-- [ ] 同步状态修复的独立测试/最终复核（代理额度受限）；Mate 验证重复点击、完成/失败、前后台、旋转与编辑不受干扰。
+- [x] 同步状态修复的自动化/复核由后续 `008` T844、T854 集成记录收口，早期代理额度限制不再作为当前阻塞；Mate 重复点击、完成/失败、前后台、旋转和编辑连续性仍由 `003` T320、`008` T848 验收。
 
 - [x] T501 创建 `android/` Kotlin/Gradle 工程与 Gradle Wrapper。
 - [x] T502 配置 application ID、arm64 构建、debug 签名和版本信息。
@@ -59,14 +68,14 @@
   删除仍复用移到回收站确认流程，并保留长按菜单及 TalkBack 自定义操作入口（FR-519）。
 - [x] T539 Android：增加纯手势策略单测，覆盖 touch slop、轴锁、位移钳制、44%/45% 阈值、甩动和无动画收敛。
 - [ ] T540 在 Mate 60 验证左滑、纵向滚动、返回收起、字体缩放、TalkBack、深浅色和回收站失败恢复；未验证前不得标记为候选或已发布。
-- [ ] T547 Android：实现根 `.trash/` 回收站浏览、Markdown 只读查看、单项永久删除和确认快照式清空；补充直接项、拒绝嵌套、取消、部分失败与附件保留测试。
+- [x] T547 Android：实现根 `.trash/` 回收站浏览、Markdown 只读查看、单项永久删除和确认快照式清空；补充直接项、拒绝嵌套、取消、部分失败与附件保留测试。（`MainActivity.showTrashBrowser/showTrashViewer`、`TrashSnapshotPolicyTest`、`TrashClearCounterTest` 及既有构建记录；实际 Provider 与设备由 T548 验收。）
 - [ ] T548 Mate 60：验证回收站为空、只读查看、单项笔记/文件夹永久删除、取消、部分失败、清空、新增项目隔离、旋转、TalkBack 和权限失效。
-- [ ] T549 Android：实现笔记与独占 assets bundle 的纯本地移动、引用扫描、相对链接重写、marker 恢复、provider-neutral 变化历史和移动后附件归属；仅运行中的同 Vault 同步互斥。
-- [ ] T550 Mate 60：验证根/深层/连续移动、图片/视频、共享引用拒绝、目标冲突、权限失效、异常恢复、移动后拍摄、同步空闲允许和运行中互斥。
-- [ ] T551 Android：将“移动到…”改为层级目录选择器，覆盖根目录、进入/返回、当前目录禁用、取消、空目录、权限读取失败、字体放大和 TalkBack。
+- [x] T549 Android：实现笔记与独占 assets bundle 的纯本地移动、引用扫描、相对链接重写、marker 恢复、provider-neutral 变化历史和移动后附件归属；仅运行中的同 Vault 同步互斥。（`VaultRepository.moveNoteWithAssets`、`NoteBundleMovePolicyTest`、`VaultMutationLeaseTest` 及既有构建记录；真实事务故障/恢复由 T550 验收。）
+- [ ] T550 Mate 60：验证根/深层/连续移动、图片/视频、共享引用拒绝、目标冲突、权限失效、异常恢复、移动后拍摄、同步空闲允许和运行中互斥；同时覆盖 T551 的目录进入/返回、根/当前目录、取消、空/不可读目录、最大字体和 TalkBack。记录原/目标 Markdown 与附件路径、恢复标记及重启结果。
+- [x] T551 Android：实现层级“移动到…”目录选择器，含根目录、进入/返回、当前目录禁用、取消、空目录与读取失败反馈。（`MainActivity.showMoveDestinationDialog` 及既有 APK 构建记录；实际点击、最大字体和 TalkBack 合并到 T550，不能以源码核对代替。）
 - [x] T545 Android：统一语义化深浅色令牌及系统主题，改进文件库分组、原生图标与编辑器紧凑保存元数据；加入一次性可访问的左滑发现提示，并验证 Markdown 视觉样式不影响往返语义（本地单测与 debug APK 构建通过）。
 - [ ] T546 Mate 60：验证 T545 在深浅色、横竖屏、长名称、空/单/多行分组、字体放大与 TalkBack 下的视觉、焦点和一次性提示行为。
-- [ ] T552 Android：为结构性文件操作建立独立队列；回收站移动显示排队/移动/复核阶段，在 Provider 确认后即时移除当前条目并后台刷新目录（FR-528）。
+- [x] T552 Android：为结构性文件操作建立独立队列；回收站移动显示排队/移动/复核阶段，在 Provider 确认后即时移除当前条目并后台刷新目录（FR-528）。（`structuralIoExecutor`、`confirmMoveToTrash` 与即时列表更新源码及既有构建记录；慢 Provider/滚动/失败反馈由 T553 验收。）
 - [ ] T553 Mate 60：验证保存/目录读取排队时的回收站移动、Provider 慢响应、成功后滚动位置、刷新失败、TalkBack 和同步互斥（FR-528）。
 - [x] T554 Android：将安装包标识改为 `com.jambus.heji`，按语言显示“禾记”或 “Heji Notes”，并记录新安装包的 Vault/Google Drive 重新授权要求（FR-529）。
 
@@ -128,13 +137,14 @@
   Provider 不确定和操作边界测试（FR-537）。
 - [ ] T570 Mate 60：验证空/非空 assets、嵌套 bundle、引用拒绝、确认后外变、Provider 整体删除、
   权限失效、同步/保存占用、TalkBack、旋转和进程中断；完成前不得标记候选（FR-537）。
-- [ ] T571 Android：修复空附件目录树因说明/代码残余路径而误报模糊引用，验证目录显式链接、
+- [x] T571 Android：修复空附件目录树因说明/代码残余路径而误报模糊引用，验证目录显式链接、
   不可读内容、非空模糊引用及确认后新增文件仍受保护（FR-537）。
-  源码与回归用例已完成；2026-10-01 当前主机缺少 Java、Android SDK 和 DevEco 工具链，
-  fresh 单测与双端打包待恢复环境后执行，不以历史产物作为本次验证。
+  Android 源码与 `AssetFolderDeleteTest` 空树/显式链接/不可读/外变回归已完成，现有 0.6.5
+  全套报告包含这些用例且无失败；2026-10-01 Android 工具链阻塞已被后续构建替代。
+  本条仅收口 Android 修复；实际 Provider 删除由 T570 验收，不声称本次核对执行了 HAP 构建。
 
 上一个 `0.5.0` / `versionCode 9` 基线已在本机通过共享 Vault 契约检查与 debug APK 构建。
 历史 `0.6.1` / `versionCode 13` 曾通过 300 项 Android 单测、fresh debug APK、共享 Vault 契约
 检查和 HAP 兼容构建。已安装的 `0.6.2`（14）通过 340 项 Android 单测/fresh APK 并完成原签名
-覆盖安装；当前开发包 `0.6.3`（15）通过 360 项单测/fresh APK，尚未安装。完成 T568、T570
+覆盖安装；当前开发包 `0.6.5`（17）记录 363 项单测/fresh APK 通过，尚无本包安装/设备验收记录。完成 T568、T570
 与 `008` 的真实服务、SAF 和 Mate 60 验收后才能进入候选状态。

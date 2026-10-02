@@ -4,7 +4,7 @@
 **Priority**: P1
 **Depends on**: 001-local-markdown-notebook, 002-camera-attachments,
 004-harmony-4-5-compatibility
-**Current Baseline**: Android APK `0.6.3` development (`versionCode 15`)
+**Current Baseline**: Android APK `0.6.5` development (`versionCode 17`)
 
 ## Goal
 
@@ -14,7 +14,7 @@
 为运行 HarmonyOS 4 的 Mate 60 提供可直接安装的 Android APK，优先完成本地
 Obsidian Vault 编辑和拍照记录闭环。
 
-当前 Android 开发基线为 `0.6.3`；`008` D20–D24 补齐同步复审边界。历史版本范围、验证状态和后续版本管理规则见
+当前 Android 开发基线为 `0.6.5`；包含 `008` D20–D24 同步边界加固、FR-838 同步分组与 FR-839 裁剪操作空间修复。历史版本范围、验证状态和后续版本管理规则见
 [`docs/RELEASE_NOTES.md`](../../RELEASE_NOTES.md)。完成 FR-501、FR-507、FR-508 对应的
 Mate 60 真机验收前，该版本不得标记为候选或正式发布。
 
@@ -154,3 +154,8 @@ FR-537 空目录边界：严格递归快照仅含目录时，普通说明、代�
 Android 版本为 `0.6.4`（16），纳入 GitHub #2 的设置同步详情分组优化。
 缺陷与实现追溯由 `008` FR-838 / T855 唯一维护；只改变 Android UI，不扩大 Vault 或同步契约。
 本次单测与 fresh APK、Mate UI 验收分别见 `008/quickstart.md`，未验收前不标记发布。
+
+## 0.6.5 开发调试版交付补记（2026-10-02）
+
+Android 版本为 `0.6.5`（17），裁剪页边缘操作空间由 `008` FR-839 / T856–T857
+唯一追溯。默认完整原图与 Vault 契约不变；自动化与真机结果见 `008/quickstart.md`。
