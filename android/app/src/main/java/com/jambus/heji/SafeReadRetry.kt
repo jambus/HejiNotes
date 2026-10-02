@@ -2,6 +2,9 @@ package com.jambus.heji
 
 import java.net.SocketException
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
@@ -20,6 +23,7 @@ class SafeReadRetry(
                     is RetryReadAuthentication -> 0L
                     is RetryableReadResponse -> retryAfter(failure.retryAfter) ?: (1000L shl attempt)
                     is SocketTimeoutException -> 1000L shl attempt
+                    is UnknownHostException, is ConnectException, is NoRouteToHostException -> 1000L shl attempt
                     is SocketException -> if (failure.message?.lowercase() in setOf("connection reset", "connection reset by peer")) 1000L shl attempt else throw failure
                     else -> throw failure
                 }

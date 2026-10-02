@@ -3,10 +3,55 @@ package com.jambus.heji
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
+import java.io.InputStream
+import java.io.IOException
+import java.net.UnknownHostException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
+import javax.net.ssl.SSLHandshakeException
 import org.junit.Assert.*
 import org.junit.Test
 
 class VerifiedSyncDownloadTest {
+    @Test fun `stream transport subtypes preserve original and safe reason before commit`() {
+        val failures = listOf(
+            UnknownHostException("secret") to SyncErrorReason.NETWORK_DNS,
+            ConnectException("secret") to SyncErrorReason.NETWORK_CONNECT,
+            NoRouteToHostException("secret") to SyncErrorReason.NETWORK_CONNECT,
+            SocketTimeoutException("secret") to SyncErrorReason.NETWORK_TIMEOUT,
+            SSLHandshakeException("secret") to SyncErrorReason.NETWORK_TLS,
+            IOException("secret", UnknownHostException()) to SyncErrorReason.NETWORK,
+            IllegalStateException("secret") to SyncErrorReason.NETWORK,
+            SyncOperationException(SyncErrorReason.REMOTE_CHANGED, "notes/doc.md") to SyncErrorReason.REMOTE_CHANGED
+        )
+        for ((failure, reason) in failures) {
+            val backend = Backend().apply { add("doc.md", "original") }
+            val input = object : InputStream() {
+                var reads = 0
+                override fun read(): Int { if (reads++ == 0) return 1; throw failure }
+            }
+            try { VerifiedSyncDownload.write(backend, "notes/doc.md", "text/plain", input, "token", false); fail() }
+            catch (actual: SyncOperationException) {
+                assertEquals(reason, actual.reason); assertEquals("notes/doc.md", actual.path)
+                assertFalse(actual.message.orEmpty().contains("secret"))
+            }
+            assertEquals("original", backend.text("doc.md"))
+            assertFalse(backend.names.containsKey(".markbook-sync-token.previous"))
+            assertEquals(listOf(".markbook-sync-token.pending"), backend.deleted)
+        }
+    }
+
+    @Test fun `stream cancellation stays cancellation and preserves original`() {
+        val backend = Backend().apply { add("doc.md", "original") }
+        val cancelled = SyncTransferCancelled()
+        val input = object : InputStream() { override fun read(): Int = throw cancelled }
+        try { VerifiedSyncDownload.write(backend, "notes/doc.md", "text/plain", input, "token", false); fail() }
+        catch (actual: SyncTransferCancelled) { assertSame(cancelled, actual) }
+        assertEquals("original", backend.text("doc.md"))
+        assertFalse(backend.names.containsKey(".markbook-sync-token.previous"))
+    }
+
     private class Backend : SyncDownloadBackend {
         val names = linkedMapOf<String, SyncDownloadDocument>()
         val bytes = linkedMapOf<String, ByteArray>()

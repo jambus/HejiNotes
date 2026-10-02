@@ -7,13 +7,17 @@ import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import javax.net.ssl.SSLHandshakeException
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.*
 import org.junit.Test
 
 class SafeReadRetryTest {
-    private class Response(val code: Int, val headers: Map<String, String> = emptyMap(), val body: String = "{}", val broken: Boolean = false, val brokenClose: Boolean = false) : HttpURLConnection(URL("https://graph.microsoft.com/v1.0/test")) {
+    private class Response(val code: Int, val headers: Map<String, String> = emptyMap(), val body: String = "{}", val broken: Boolean = false, val brokenClose: Boolean = false, val establishmentFailure: IOException? = null, val bodyFailure: IOException? = null) : HttpURLConnection(URL("https://graph.microsoft.com/v1.0/test")) {
         var closed = false
         private var verb = "GET"
         override fun setRequestMethod(value: String) { verb = value }
@@ -21,9 +25,9 @@ class SafeReadRetryTest {
         override fun disconnect() { closed = true }
         override fun usingProxy() = false
         override fun connect() {}
-        override fun getResponseCode() = code
+        override fun getResponseCode(): Int { establishmentFailure?.let { throw it }; return code }
         override fun getHeaderField(name: String): String? = headers[name]
-        override fun getInputStream(): InputStream = if (broken) object : InputStream() { override fun read(): Int = throw SocketTimeoutException() } else ByteArrayInputStream(body.toByteArray())
+        override fun getInputStream(): InputStream = if (broken || bodyFailure != null) object : InputStream() { override fun read(): Int = throw (bodyFailure ?: SocketTimeoutException()) } else ByteArrayInputStream(body.toByteArray())
         override fun getOutputStream() = ByteArrayOutputStream()
         override fun getErrorStream(): InputStream = object : ByteArrayInputStream(byteArrayOf()) {
             override fun close() { if (brokenClose) throw SocketTimeoutException() }
@@ -152,5 +156,80 @@ class SafeReadRetryTest {
         assertEquals(1,count)
         try { SafeReadRetry(wait={throw InterruptedException()}).execute(AtomicBoolean()) {throw SocketTimeoutException()};fail() } catch (_: SyncTransferCancelled) {}
         assertTrue(Thread.interrupted())
+    }
+
+    private fun connectionFailures(): List<IOException> = listOf(UnknownHostException("private"), ConnectException("private"), NoRouteToHostException("private"))
+
+    @Test fun `both providers recover establishment DNS and connection failures within three attempts`() {
+        for (provider in listOf("google", "one")) for (failure in connectionFailures()) {
+            val first = Response(200, establishmentFailure = failure)
+            val second = Response(200, establishmentFailure = failure)
+            val queue = mutableListOf(first, second, Response(200))
+            var waited = 0L
+            api(provider, queue, wait = { waited += it }).download(DriveItem("i", "n", "text/plain")).close()
+            assertEquals(3000L, waited)
+            assertTrue(queue.isEmpty()); assertTrue(first.closed); assertTrue(second.closed)
+            val exhausted = mutableListOf(Response(200, establishmentFailure = failure), Response(200, establishmentFailure = failure), Response(200, establishmentFailure = failure), Response(200))
+            try { api(provider, exhausted).download(DriveItem("i", "n", "text/plain")); fail() }
+            catch (actual: IOException) { assertSame(failure, actual) }
+            assertEquals(1, exhausted.size)
+        }
+    }
+
+    @Test fun `cancelled DNS and connection waits open no new requests for either provider`() {
+        for (provider in listOf("google", "one")) for (failure in connectionFailures()) {
+            val cancelled = AtomicBoolean()
+            val first = Response(200, establishmentFailure = failure)
+            val queue = mutableListOf(first, Response(200))
+            try { api(provider, queue, cancelled, { cancelled.set(true) }).download(DriveItem("i", "n", "text/plain")); fail() }
+            catch (_: SyncTransferCancelled) {}
+            assertEquals(1, queue.size); assertTrue(first.closed)
+        }
+    }
+
+    @Test fun `TLS even with nested timeout and transport body or write failures never replay`() {
+        val tls = SSLHandshakeException("private").apply { initCause(SocketTimeoutException()) }
+        for (provider in listOf("google", "one")) {
+            val queue = mutableListOf(Response(200, establishmentFailure = tls), Response(200))
+            try { api(provider, queue).download(DriveItem("i", "n", "text/plain")); fail() }
+            catch (failure: SSLHandshakeException) { assertSame(tls, failure) }
+            assertEquals(1, queue.size)
+            for (failure in connectionFailures() + tls) {
+                val body = mutableListOf(Response(200, bodyFailure = failure), Response(200))
+                try { api(provider, body).download(DriveItem("i", "n", "text/plain")).use { it.read() }; fail() }
+                catch (actual: IOException) { assertSame(failure, actual) }
+                assertEquals(1, body.size)
+                val writes = mutableListOf(Response(200, establishmentFailure = failure), Response(200))
+                try { api(provider, writes).upload("p", "n", "text/plain", ByteArrayInputStream(byteArrayOf(1))); fail() }
+                catch (actual: IOException) { assertSame(failure, actual) }
+                assertEquals(1, writes.size)
+            }
+        }
+    }
+
+    @Test fun `all mutating gateway operations leave transport failures unreplayed`() {
+        for (provider in listOf("google", "one")) for (failure in connectionFailures()) {
+            val mutations: List<(DriveGateway) -> Unit> = listOf(
+                { it.createFolder("p", "n"); Unit },
+                { it.upload("p", "n", "text/plain", ByteArrayInputStream(byteArrayOf(1))) },
+                { it.replace("i", "\"etag\"", "text/plain", ByteArrayInputStream(byteArrayOf(1))) },
+                { it.trash("i", "\"etag\"") },
+                { it.copy("i", "p", "n"); Unit }
+            )
+            for ((index, mutate) in mutations.withIndex()) {
+                val queue = mutableListOf<Response>()
+                // OneDrive streams a copy through safe source/target reads before its single upload.
+                if (provider == "one" && index == 4) {
+                    queue += Response(200, body = "{\"id\":\"i\",\"name\":\"source\",\"file\":{}}")
+                    queue += Response(200, body = "body")
+                    queue += Response(200, body = "{\"value\":[]}")
+                }
+                val first = Response(200, establishmentFailure = failure)
+                queue += first; queue += Response(200)
+                try { mutate(api(provider, queue)); fail() }
+                catch (actual: IOException) { assertSame(failure, actual) }
+                assertEquals(1, queue.size); assertTrue(first.closed)
+            }
+        }
     }
 }

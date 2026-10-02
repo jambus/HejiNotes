@@ -100,7 +100,9 @@ Mate 60 用户在 Android APK 中通过 Microsoft 官方登录连接个人或组
   OneDrive 的一次 GET 401 刷新重放计入该阶段上限；同一 API 实例最多刷新一次。
   Graph 响应和显式重定向下载是独立阶段，各有三次尝试/30 秒等待预算；因此 OneDrive
   一次下载最多六次 adapter 请求、60 秒重试等待，不含网络超时或消费者读取时间。
-- 暂时性 HTTP 仅允许 429、500、502、503、504；传输错误仅明确超时和连接重置。
+- 暂时性 HTTP 仅允许 429、500、502、503、504；传输错误仅明确超时、连接重置，以及
+  DNS 解析失败、连接建立失败或无路由（网络/VPN 切换时可能短暂发生）。TLS/证书与普通 IO
+  错误不重试，不检查原始异常文字猜测 DNS/连接原因，也不扩及响应正文。
   无有效服务等待建议时使用 1/2 秒退避；总等待预算为 30 秒，不包括连接/读取超时。
   有效 `Retry-After` 秒数或 HTTP 日期不得提前重试；超过剩余预算则终止。溢出数值安全拒绝，
   无效格式使用有限退避。401/403/404/409/412 不按临时错误重试，403 不刷新令牌。
@@ -114,3 +116,11 @@ Mate 60 用户在 Android APK 中通过 Microsoft 官方登录连接个人或组
 服务等待依据：[Microsoft Graph throttling](https://learn.microsoft.com/en-us/graph/throttling) 与
 [Google Drive errors](https://developers.google.com/workspace/drive/api/guides/handle-errors)。
 本项目按上述更窄的读取范围执行，真实服务行为仍须单独验收。
+
+## Android 系统 VPN 兼容（008 D28 / FR-844）
+
+Google Drive 与 OneDrive 保持系统默认路由；VPN 的应用名单、分流规则与 DNS 配置由 VPN
+客户端负责。无额外网络选择权限、全进程绑定、硬编码代理或 TLS 放宽。Google Play 服务
+获取令牌是独立联网依赖，不因 Drive adapter 的读取重试而自动修复。验收需在规则模式下
+记录应用是否入隧道、端点实际命中规则、授权/API 阶段及最终安全错误代码，不能以 JVM
+测试证明 Fclash 或任一特定 VPN 已通过实测。

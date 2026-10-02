@@ -7,7 +7,11 @@
     <string name="sync_reason_unknown">Could not complete this operation. Retry sync.</string>
     <string name="sync_reason_auth">Authorization expired. Sign in again.</string>
     <string name="sync_reason_permission">Access was denied. Check cloud or Vault permissions.</string>
-    <string name="sync_reason_network">Network transfer failed. Check the connection and retry.</string>
+    <string name="sync_reason_network">Network transfer failed. Check the connection and retry. If you use a VPN, check its app access and domain rules.</string>
+    <string name="sync_reason_network_dns">Could not resolve the service address. Check the network and retry. If you use a VPN, check its app access and domain rules.</string>
+    <string name="sync_reason_network_connect">Could not connect to the service. Check the network and retry. If you use a VPN, check its app access and domain rules.</string>
+    <string name="sync_reason_network_timeout">The network request timed out. Check the connection and retry. If you use a VPN, check its app access and domain rules.</string>
+    <string name="sync_reason_network_tls">Could not establish a secure connection. Check the device time and network, then retry. If you use a VPN, check its domain rules.</string>
     <string name="sync_reason_rate">The cloud service is busy. Retry later.</string>
     <string name="sync_reason_missing">The cloud item is unavailable. Check the selected folder.</string>
     <string name="sync_reason_remote_changed">Cloud content changed during sync. Retry to compare again.</string>
@@ -51,7 +55,7 @@
     <string name="drive_sync_selection_missing">No Google Drive Vault is selected</string>
     <string name="drive_sync_tuple_changed">The current Vault, Google account, or remote folder changed. Sign in or confirm the selection again.</string>
     <string name="drive_sync_vault_busy">This Vault is moving files. Try syncing again when it finishes.</string>
-    <string name="drive_sync_connection_failed">Could not connect to Google Drive. Check the network or sign in again.</string>
+    <string name="drive_sync_connection_failed">Could not connect to Google Drive. Check the network or sign in again. Google sign-in also requires Google Play services to connect. If you use a VPN, check app access for Heji Notes and Google Play services, and the Google domain rules.</string>
     <string name="drive_target_unselected">No remote Vault selected</string>
     <string name="onedrive_status_not_configured">App registration not configured</string>
     <string name="onedrive_not_configured_detail">OneDrive needs an Entra Android app registration. Set HEJI_ONEDRIVE_CLIENT_ID and HEJI_ONEDRIVE_SIGNATURE_HASH for this build.</string>

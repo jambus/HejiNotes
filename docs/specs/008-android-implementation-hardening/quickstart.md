@@ -239,3 +239,45 @@ cd android
   带既有错误和完成搬运的终止组合、每种写入失败组合，部分仅有源码复核。
   没有把这些静态结论写作额外测试通过；本轮没有真实云盘、SAF 或 Mate 覆盖。
   T317/T329/T330/T848 保持开放，当前包未安装或发布，仍为非候选开发版。
+
+## D28 / FR-844 · 系统 VPN 排查（0.6.9 / 21）
+
+源码检查：GoogleDriveApi 与 OneDriveApi 默认 `URL.openConnection()`，未发现物理网络绑定、
+显式直连代理、自定义 DNS 或 TLS 放宽。Android 默认网络及 VPN 应用名单的行为依据
+[默认网络说明](https://developer.android.com/develop/connectivity/network-ops/reading-network-state) 和
+[分应用 VPN 说明](https://developer.android.com/develop/connectivity/vpn)。
+GoogleAuthUtil 获取令牌依赖 Google Play 服务自身联网，位于 Drive adapter 构造之前。
+
+2026-10-02 本轮只读设备检查：Mate 60 当前安装 0.6.8（20）；网络服务记录包含 VPN 传输类型，
+但这些记录不能证明禾记流量进入隧道或命中代理规则。仅过滤安全字段读取 Google 任务记录，
+得到中断/运行状态、零处理计数及 UNKNOWN；没有可用的后台服务具体异常类日志。
+因此本次不能确认用户“网络异常”的实际 DNS/连接/授权根因；未安装或启动同步，未输出
+Vault/账号/远端目标，未读取 VPN 订阅、令牌或私钥。
+
+规则模式真机步骤（T861，待授权/执行）：
+
+1. 确认 Fclash 的 VPN 隧道已启用；若使用允许名单，加入禾记 `com.jambus.heji`，若使用
+   排除名单，确保禾记不在其中。Google 登录失败时同时检查 Google Play 服务联网范围。
+2. 保持规则模式，在连接/请求面板检查同步 API `www.googleapis.com` 的实际规则与出口，
+   不能只因应用进入隧道就认为请求不再 DIRECT。登录请求按实际观测域名检查，不猜测固定名单。
+3. 保存应用名单后按客户端提示重连 VPN。用专用测试 Vault 触发授权与同步，分别记录阶段、
+   安全原因、完成计数、取消与网络切换；不要求切全局模式或关闭 TLS 验证。
+4. JVM HTTP 测试不能代替以上实测。
+
+自动化与包证据（2026-10-02）：
+
+- 开发者受影响测试 38 项通过；独立 tester 使用已有 JDK 17（DevEco JBR 不可用）及 Android SDK，
+  在 android/ 执行 `./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon --rerun-tasks`。
+  24s 成功，36 项任务全部执行；49 suites / 397 tests，0 failures/errors/skips。
+- 构建前后 131 个 Android 源码/测试/资源/构建文件逐项 SHA-256 相同；`git diff --check`、
+  Vault 契约验证及中英文 strings XML 校验通过，原 reviewer 最终复核无阻塞问题。
+- fresh APK：`android/app/build/outputs/apk/debug/app-debug.apk`，com.jambus.heji，0.6.9（21），
+  7,217,844 bytes，生成于 2026-10-02 21:20:05 +0800。SHA-256：
+  `38a0f64ff060ed59a5d55aafbcb5109780c111a19381a8a06d702f60faca63c7`。
+  公共签名校验通过，证书 SHA-256 与原版本一致：
+  `b3be289894592585b98c0ed9076f98612e7cddb7c7574c6343ce0b400d018e20`；主协调者另核对 XML 与 APK 哈希。
+- 自动化覆盖两个 Provider 的 DNS/连接恢复、三次上限、取消、嵌套超时的 TLS 不重试、
+  下载流与全部 gateway 修改操作不重放；直接类型诊断/语义优先/脱敏，以及下载故障保留
+  原内容、子类型和取消。脚本化 HTTP 不等于真实节点、DNS、Play 服务授权或 SAF 行为。
+- 本轮未安装或启动真实同步、未修改 VPN 设置；规则模式端点命中及授权阶段根因仍未知，
+  T861、T317/T329/T330/T848 继续开放。仅工作树交付，无本轮 Git 暂存/提交/推送。

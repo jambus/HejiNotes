@@ -1,10 +1,16 @@
 package com.jambus.heji
 
 import java.io.IOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 
 /** Allowlisted, locale-neutral diagnostics. Exception text and remote URLs never enter task state. */
 enum class SyncErrorReason {
-    UNKNOWN, AUTH_REQUIRED, PERMISSION_DENIED, NETWORK, RATE_LIMITED, REMOTE_MISSING,
+    UNKNOWN, AUTH_REQUIRED, PERMISSION_DENIED, NETWORK, NETWORK_DNS, NETWORK_CONNECT,
+    NETWORK_TIMEOUT, NETWORK_TLS, RATE_LIMITED, REMOTE_MISSING,
     REMOTE_CHANGED, PATH_AMBIGUOUS, LOCAL_READ_FAILED, LOCAL_WRITE_FAILED,
     CONTENT_MISMATCH, LOCAL_CHANGED, BASELINE_FAILED, COMMIT_UNCERTAIN,
     PRECONDITION_UNAVAILABLE, SYNC_BUSY
@@ -15,6 +21,10 @@ fun SyncErrorReason.label(context: android.content.Context): String = context.ge
     SyncErrorReason.AUTH_REQUIRED -> R.string.sync_reason_auth
     SyncErrorReason.PERMISSION_DENIED -> R.string.sync_reason_permission
     SyncErrorReason.NETWORK -> R.string.sync_reason_network
+    SyncErrorReason.NETWORK_DNS -> R.string.sync_reason_network_dns
+    SyncErrorReason.NETWORK_CONNECT -> R.string.sync_reason_network_connect
+    SyncErrorReason.NETWORK_TIMEOUT -> R.string.sync_reason_network_timeout
+    SyncErrorReason.NETWORK_TLS -> R.string.sync_reason_network_tls
     SyncErrorReason.RATE_LIMITED -> R.string.sync_reason_rate
     SyncErrorReason.REMOTE_MISSING -> R.string.sync_reason_missing
     SyncErrorReason.REMOTE_CHANGED -> R.string.sync_reason_remote_changed
@@ -45,6 +55,10 @@ internal object SyncFailurePolicy {
             is DriveApiException -> failure.reason
             is OneDriveReloginRequired -> SyncErrorReason.AUTH_REQUIRED
             is SecurityException -> SyncErrorReason.PERMISSION_DENIED
+            is UnknownHostException -> SyncErrorReason.NETWORK_DNS
+            is ConnectException, is NoRouteToHostException -> SyncErrorReason.NETWORK_CONNECT
+            is SocketTimeoutException -> SyncErrorReason.NETWORK_TIMEOUT
+            is SSLException -> SyncErrorReason.NETWORK_TLS
             is IOException -> SyncErrorReason.NETWORK
             else -> SyncErrorReason.UNKNOWN
         }

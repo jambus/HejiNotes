@@ -1,6 +1,7 @@
 package com.jambus.heji
 
 import java.io.InputStream
+import java.io.IOException
 import java.io.OutputStream
 import java.security.MessageDigest
 
@@ -60,6 +61,8 @@ internal object VerifiedSyncDownload {
                         throw failure
                     } catch (failure: SyncTransferCancelled) {
                         throw failure
+                    } catch (failure: IOException) {
+                        throw SyncOperationException(SyncFailurePolicy.fromException(failure).reason, path)
                     } catch (_: Exception) {
                         throw SyncOperationException(SyncErrorReason.NETWORK, path)
                     }

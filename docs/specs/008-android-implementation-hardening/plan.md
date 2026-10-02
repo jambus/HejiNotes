@@ -193,3 +193,14 @@ adapter、引擎和后台服务。独立 tester 执行完整单测/fresh APK，�
 手动刷新复用 refreshVisibleSyncPage，记录页面内最近读取时间并以本地化轻提示确认；
 保持后台更新静默，离开详情或切换 Provider 后清除页面反馈。执行 Android 全套单测/fresh APK，
 由原只读 reviewer 复核；Mate 视觉、TalkBack、最大字体和重复点击另记录。
+
+## D28 / FR-844 实施计划
+
+L3：Sol 只读 reviewer 确认系统默认 VPN 路由与授权/API 边界；单一 Sol developer 负责
+SafeReadRetry、SyncFailure、VerifiedSyncDownload、中英文资源及相应 JVM 测试。
+协调者独占设计/003 能力约束/008 缺陷记录/005 包版本文档和构建版本；不改变 Vault 契约。
+开发者运行受影响测试，独立 Sol tester 对接受后的修订执行完整单测和 fresh APK，原 reviewer
+最终复核。保留用户已有暂存/未暂存修改，无安装、实云盘写入或 VPN 设置改动。
+接受标准：DNS/连接安全 GET 最多三次且取消后零新请求；TLS/正文/所有写入不重放；
+分类仅使用直接类型、语义优先且不泄密；落盘保留子类型与原文件；默认网络与权限不变。
+规则模式实测（含 Fclash 应用名单/端点命中/Play 服务授权）另行记录，不以 JVM 代替。

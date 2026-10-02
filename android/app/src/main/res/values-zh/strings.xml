@@ -7,7 +7,11 @@
     <string name="sync_reason_unknown">此操作未完成，请重试同步。</string>
     <string name="sync_reason_auth">授权已失效，请重新登录。</string>
     <string name="sync_reason_permission">访问被拒绝，请检查云端或 Vault 权限。</string>
-    <string name="sync_reason_network">网络传输失败，请检查连接后重试。</string>
+    <string name="sync_reason_network">网络传输失败，请检查连接后重试。如使用 VPN，请检查其应用名单和域名规则。</string>
+    <string name="sync_reason_network_dns">无法解析服务地址，请检查网络后重试。如使用 VPN，请检查其应用名单和域名规则。</string>
+    <string name="sync_reason_network_connect">无法连接服务，请检查网络后重试。如使用 VPN，请检查其应用名单和域名规则。</string>
+    <string name="sync_reason_network_timeout">网络请求超时，请检查连接后重试。如使用 VPN，请检查其应用名单和域名规则。</string>
+    <string name="sync_reason_network_tls">无法建立安全连接，请检查设备时间和网络后重试。如使用 VPN，请检查其域名规则。</string>
     <string name="sync_reason_rate">云端服务繁忙，请稍后重试。</string>
     <string name="sync_reason_missing">云端项目不可用，请检查所选目录。</string>
     <string name="sync_reason_remote_changed">同步期间云端内容已变化，请重试比较。</string>
@@ -51,7 +55,7 @@
     <string name="drive_sync_selection_missing">尚未选择 Google Drive Vault</string>
     <string name="drive_sync_tuple_changed">当前 Vault、Google 账号或远端目录已变化，请重新登录或确认后重试。</string>
     <string name="drive_sync_vault_busy">当前 Vault 正在移动文件，请完成后重试同步。</string>
-    <string name="drive_sync_connection_failed">无法连接 Google Drive，请检查网络或重新登录。</string>
+    <string name="drive_sync_connection_failed">无法连接 Google Drive，请检查网络或重新登录。Google 登录还需要 Google Play 服务能够联网。如使用 VPN，请检查禾记和 Google Play 服务的应用名单以及 Google 域名规则。</string>
     <string name="drive_target_unselected">未选择远端 Vault</string>
     <string name="onedrive_status_not_configured">尚未配置应用注册</string>
     <string name="onedrive_not_configured_detail">OneDrive 需要 Entra Android 应用注册。请为本次构建配置 HEJI_ONEDRIVE_CLIENT_ID 和 HEJI_ONEDRIVE_SIGNATURE_HASH。</string>

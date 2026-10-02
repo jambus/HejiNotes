@@ -1,10 +1,47 @@
 package com.jambus.heji
 
 import java.io.IOException
+import java.net.UnknownHostException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
+import javax.net.ssl.SSLHandshakeException
 import org.junit.Assert.*
 import org.junit.Test
 
 class SyncFailureHistoryTest {
+    @Test fun `network reasons use direct types only without exception text`() {
+        val secret = "https://private.example?token=secret-account@example.com"
+        val failures = listOf(
+            UnknownHostException(secret) to SyncErrorReason.NETWORK_DNS,
+            ConnectException(secret) to SyncErrorReason.NETWORK_CONNECT,
+            NoRouteToHostException(secret) to SyncErrorReason.NETWORK_CONNECT,
+            SocketTimeoutException(secret) to SyncErrorReason.NETWORK_TIMEOUT,
+            SSLHandshakeException(secret).apply { initCause(SocketTimeoutException(secret)) } to SyncErrorReason.NETWORK_TLS,
+            IOException(secret, UnknownHostException(secret)) to SyncErrorReason.NETWORK,
+            IOException("UnknownHostException timeout SSL") to SyncErrorReason.NETWORK
+        )
+        for ((failure, reason) in failures) {
+            val detail = SyncFailurePolicy.fromException(failure, secret)
+            assertEquals(reason, detail.reason)
+            assertEquals("", detail.path)
+            assertFalse(detail.toString().contains("secret"))
+        }
+    }
+
+    @Test fun `semantic authorization and permission reasons precede nested transport causes`() {
+        val failures = listOf(
+            SyncOperationException(SyncErrorReason.LOCAL_WRITE_FAILED, "notes/a.md") to SyncErrorReason.LOCAL_WRITE_FAILED,
+            DriveApiException("secret", SyncErrorReason.AUTH_REQUIRED) to SyncErrorReason.AUTH_REQUIRED,
+            OneDriveReloginRequired() to SyncErrorReason.AUTH_REQUIRED,
+            SecurityException("secret") to SyncErrorReason.PERMISSION_DENIED
+        )
+        for ((failure, reason) in failures) {
+            failure.initCause(UnknownHostException("secret"))
+            assertEquals(reason, SyncFailurePolicy.fromException(failure).reason)
+        }
+    }
+
     private fun snapshot(provider: String, vault: String, status: SyncTaskStatus = SyncTaskStatus.FAILED) = SyncTaskSnapshot(
         provider, provider, "folder", status, 0, 0, SyncMessageCode.PARTIAL_FAILURE, 1L, 2L,
         errors = listOf(SyncErrorDetail(SyncErrorCode.ITEM_FAILED, "笔记/文档.md", SyncErrorReason.NETWORK)),
