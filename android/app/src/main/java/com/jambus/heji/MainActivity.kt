@@ -166,7 +166,11 @@ class MainActivity : Activity() {
         }
     }
 
+    private var photoObserverSuspended = false
+
     override fun onSaveInstanceState(outState: Bundle) {
+        photoObserverSuspended = true
+        AppNoteSaveCoordinator.detachPhotoObserver(this)
         super.onSaveInstanceState(outState)
         outState.putString(SavedStateBundle.KEY_SCREEN, screen.name)
         outState.putString("heji_sync_details_provider", syncDetailsProvider)
@@ -275,62 +279,41 @@ class MainActivity : Activity() {
                 val note = SavedStateBundle.getDocument(savedInstanceState, SavedStateBundle.PREFIX_NOTE)
                 val file = capturePath?.let { File(it) }
                 val wasSaving = savedInstanceState.getBoolean(SavedStateBundle.KEY_PHOTO_SAVE_PENDING, false)
-                if (file != null && file.exists() && note != null) {
+                val operation = file?.let { AppNoteSaveCoordinator.photoOperation(it.absolutePath) }
+                if (wasSaving && operation == null && note != null) {
+                    showInterruptedPhotoRecovery(note)
+                    return
+                }
+                if (file != null && note != null && (file.exists() || operation != null)) {
                     captureFile = file
                     currentNote = note
-                    // The Vault remains the only persisted body source; photo body context is not bundled.
                     photoContextContent = null
                     photoSavedBodyHash = savedInstanceState.getString(SavedStateBundle.KEY_PHOTO_SAVED_BODY_HASH)
                     photoContextCaretOffset = savedInstanceState.getInt(SavedStateBundle.KEY_PHOTO_CARET_OFFSET, 0)
                     photoContextScrollY = savedInstanceState.getInt(SavedStateBundle.KEY_PHOTO_CONTEXT_SCROLL_Y, 0)
-                    val bitmap = decodeCapturePreview(file)
+                    val bitmap = if (file.exists()) decodeCapturePreview(file) else null
                     if (bitmap != null) {
                         showPhotoEditor(bitmap)
-                        val modeName = savedInstanceState.getString(SavedStateBundle.KEY_PHOTO_MODE)
-                        val mode = modeName?.let {
+                        val mode = savedInstanceState.getString(SavedStateBundle.KEY_PHOTO_MODE)?.let {
                             try { PhotoEditMode.valueOf(it) } catch (_: Exception) { null }
                         } ?: PhotoEditMode.RECTANGLE
-                        editorView?.let { ev ->
-                            setPhotoMode(ev, mode)
-                            val handles = SavedStateBundle.getHandles(savedInstanceState)
-                            if (handles != null) {
-                                ev.restoreHandles(handles)
-                            }
+                        editorView?.let { view ->
+                            setPhotoMode(view, mode)
+                            SavedStateBundle.getHandles(savedInstanceState)?.let(view::restoreHandles)
                         }
-                        if (wasSaving || AppNoteSaveCoordinator.hasPhotoSession(file.absolutePath)) {
-                            photoSavePending = true
-                            photoInsertAction?.isEnabled = false
-                            photoModeActions.forEach { it.isEnabled = false }
-                            photoStatusView?.text = "正在写入原图、校正图和笔记…"
-                            AppNoteSaveCoordinator.observePhotoSession(file.absolutePath) { result ->
-                                when (result) {
-                                    is AppNoteSaveCoordinator.PhotoSessionResult.Success -> {
-                                        if (!bitmap.isRecycled) bitmap.recycle()
-                                        discardCaptureFile()
-                                        currentNote = result.refreshedNote
-                                        photoSavePending = false
-                                        pendingEditorScrollY = photoContextScrollY
-                                        pendingCaretImagePath = result.attachmentName
-                                        openNote(result.refreshedNote)
-                                    }
-                                    is AppNoteSaveCoordinator.PhotoSessionResult.Failure -> {
-                                        photoSavePending = false
-                                        photoInsertAction?.isEnabled = true
-                                        photoModeActions.forEach { it.isEnabled = true }
-                                        photoStatusView?.text = result.message
-                                    }
-                                    AppNoteSaveCoordinator.PhotoSessionResult.InProgress -> Unit
-                                }
-                            }
-                        }
+                    } else if (operation != null) {
+                        showNoteLoading(note, getString(R.string.photo_restoring_result))
+                        screen = Screen.PHOTO
                     } else {
-                        openNote(note)
+                        file.delete()
+                        showInterruptedPhotoRecovery(note)
                     }
+                    if (operation != null) observePhotoOperation(operation)
                 } else if (note != null) {
-                    openNote(note)
-                } else {
-                    showVaultBrowser(resetToRoot = false)
+                    file?.delete()
+                    showInterruptedPhotoRecovery(note)
                 }
+                else showVaultBrowser(resetToRoot = false)
             }
             Screen.SEARCH -> {
                 showSearch()
@@ -374,6 +357,7 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        resumePhotoObservation()
         stopObservingSync = SyncTaskStateStore(this).observe {
             handler.removeCallbacks(refreshSyncUi)
             handler.post(refreshSyncUi)
@@ -428,6 +412,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        AppNoteSaveCoordinator.detachPhotoObserver(this)
         handler.removeCallbacks(autosave)
         driveExecutor.shutdownNow()
         // Never interrupt an already-confirmed structural mutation; its repository lease cleans up in finally.
@@ -2182,9 +2167,20 @@ class MainActivity : Activity() {
             when (result) {
                 is NoteReadResult.Success -> when (val recovery = AppNoteSaveCoordinator.noteRecovery(note.uri.toString())) {
                     is AppNoteSaveCoordinator.NoteRecovery.Failed -> {
+                        if (!EditorRecoveryPolicy.canRestoreFailedSnapshot(
+                                restoredSaveCoordinatorNoteUri == note.uri.toString(),
+                                saveCoordinator.revision, recovery.snapshot.revision
+                            )) {
+                            showUnsavedRecoveryError(note, result.content)
+                            return@submitRead
+                        }
                         saveCoordinator.restore(
-                            maxOf(saveCoordinator.revision, recovery.snapshot.revision),
-                            saveCoordinator.persistedRevision,
+                            recovery.snapshot.revision,
+                            EditorRecoveryPolicy.failedSnapshotPersistedRevision(
+                                restoredSaveCoordinatorNoteUri == note.uri.toString(),
+                                saveCoordinator.persistedRevision,
+                                AppNoteSaveCoordinator.getRevision(note.uri.toString())
+                            ),
                             failed = true
                         )
                         restoredSaveCoordinatorNoteUri = note.uri.toString()
@@ -3537,7 +3533,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
         }, LinearLayout.LayoutParams(0, dp(44), 1f))
-        photoInsertAction = action("插入照片", true) { commitPhoto(bitmap, view) }
+        photoInsertAction = action("插入照片", true) { commitPhoto(view) }
         header.addView(photoInsertAction)
         photoStatusView = TextView(this).apply {
             text = "拖动四个角点调整裁剪范围"
@@ -3563,7 +3559,74 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
-    private fun commitPhoto(bitmap: Bitmap, view: PhotoEditorView) {
+    private fun resumePhotoObservation() {
+        photoObserverSuspended = false
+        if (screen == Screen.PHOTO) captureFile?.let { file ->
+            AppNoteSaveCoordinator.photoOperation(file.absolutePath)?.let(::observePhotoOperation)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumePhotoObservation()
+    }
+
+    private fun showInterruptedPhotoRecovery(note: VaultDocument) {
+        releaseEditor()
+        currentNote = note
+        screen = Screen.EDITOR_ERROR
+        val root = pageRoot(COLOR_EDITOR_BACKGROUND)
+        root.addView(simpleToolbar("‹  文件", note.name.removeSuffix(".md")) { showVaultBrowser() }, matchWrap())
+        root.addView(infoBanner(getString(R.string.photo_interrupted)), matchWrap())
+        root.addView(action(getString(R.string.photo_check_saved_note), true) { openNote(note) }, matchWrap())
+        setContentView(root)
+    }
+
+    private fun observePhotoOperation(operation: AppNoteSaveCoordinator.PhotoOperation) {
+        photoSavePending = true
+        photoInsertAction?.isEnabled = false
+        photoModeActions.forEach { it.isEnabled = false }
+        AppNoteSaveCoordinator.observePhotoSession(operation, this) { result ->
+            if (photoObserverSuspended || isFinishing || isDestroyed || screen != Screen.PHOTO ||
+                captureFile?.absolutePath != operation.captureFilePath ||
+                currentNote?.uri.toString() != operation.noteUri) return@observePhotoSession
+            when (result) {
+                is AppNoteSaveCoordinator.PhotoSessionResult.Success -> {
+                    if (!AppNoteSaveCoordinator.acknowledgePhotoSession(operation, this)) return@observePhotoSession
+                    pendingEditorScrollY = operation.scrollY
+                    pendingCaretImagePath = result.attachmentName
+                    photoSavePending = false
+                    discardCaptureFile()
+                    openNote(result.refreshedNote)
+                }
+                is AppNoteSaveCoordinator.PhotoSessionResult.Failure -> {
+                    val phase = AppNoteSaveCoordinator.photoPhase(operation.captureFilePath)
+                    if (phase == AppNoteSaveCoordinator.PhotoPhase.RECOVERY_REQUIRED) {
+                        photoStatusView?.text = result.message
+                        if (photoStatusView == null) showNoteLoading(currentNote!!, result.message)
+                        screen = Screen.PHOTO
+                        return@observePhotoSession
+                    }
+                    if (!AppNoteSaveCoordinator.acknowledgePhotoSession(operation, this)) return@observePhotoSession
+                    photoSavePending = false
+                    if (phase == AppNoteSaveCoordinator.PhotoPhase.CANCELLED) restoreEditorScreen()
+                    else if (editorView != null) showPhotoSaveFailure(result.message)
+                    else { toast(result.message); restoreEditorScreen() }
+                }
+                AppNoteSaveCoordinator.PhotoSessionResult.InProgress -> Unit
+            }
+        }
+    }
+
+    private fun rollbackPhotoPairForOperation(
+        attachments: PhotoAttachments, operation: AppNoteSaveCoordinator.PhotoOperation
+    ): Boolean {
+        if (repository.rollbackPhotoPair(attachments)) return true
+        AppNoteSaveCoordinator.requirePhotoRecovery(operation, getString(R.string.photo_unknown_outcome))
+        return false
+    }
+
+    private fun commitPhoto(view: PhotoEditorView) {
         if (photoSavePending) return
         val capture = captureFile
         val note = currentNote
@@ -3584,111 +3647,110 @@ class MainActivity : Activity() {
             showPhotoSaveFailure("笔记基线已失效，请返回笔记后重新拍摄")
             return
         }
-        AppNoteSaveCoordinator.startPhotoSession(capture.absolutePath, note.uri.toString())
+        val operation = AppNoteSaveCoordinator.startPhotoSession(
+            capture.absolutePath, note.uri.toString(), photoContextCaretOffset,
+            photoContextScrollY, expectedSavedBodyHash
+        ) ?: run {
+            AppNoteSaveCoordinator.photoOperation(capture.absolutePath)?.let(::observePhotoOperation)
+            return
+        }
+        observePhotoOperation(operation)
         AppNoteSaveCoordinator.executeMedia {
-            if (AppNoteSaveCoordinator.isPhotoSessionCancelled(capture.absolutePath)) {
-                if (!bitmap.isRecycled) bitmap.recycle()
+            val workerBitmap = decodeCapturePreview(capture)
+            if (workerBitmap == null) {
+                AppNoteSaveCoordinator.completePhotoSession(operation, false, null, null, getString(R.string.photo_decode_failed))
+                AppNoteSaveCoordinator.finishPhotoWorker(operation)
+                return@executeMedia
+            }
+            if (AppNoteSaveCoordinator.isPhotoSessionCancelled(operation)) {
+                if (!workerBitmap.isRecycled) workerBitmap.recycle()
+                AppNoteSaveCoordinator.finishPhotoWorker(operation)
                 return@executeMedia
             }
             val corrected = try {
-                PhotoTransformer.transform(bitmap, transformRequest)
+                PhotoTransformer.transform(workerBitmap, transformRequest)
             } catch (_: Exception) {
                 AppNoteSaveCoordinator.completePhotoSession(
-                    capture.absolutePath,
+                    operation,
                     false,
                     null,
                     null,
                     "无法处理照片，请调整后重试"
                 )
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    showPhotoSaveFailure("无法处理照片，请调整后重试")
-                }
+                if (!workerBitmap.isRecycled) workerBitmap.recycle()
+                AppNoteSaveCoordinator.finishPhotoWorker(operation)
                 return@executeMedia
             }
-            if (AppNoteSaveCoordinator.isPhotoSessionCancelled(capture.absolutePath)) {
-                if (!bitmap.isRecycled) bitmap.recycle()
+            if (AppNoteSaveCoordinator.isPhotoSessionCancelled(operation)) {
+                if (!workerBitmap.isRecycled) workerBitmap.recycle()
+                AppNoteSaveCoordinator.finishPhotoWorker(operation)
                 return@executeMedia
             }
             noteIoExecutor.execute {
-                if (!AppNoteSaveCoordinator.transitionPhotoSession(
-                        capture.absolutePath,
-                        AppNoteSaveCoordinator.PhotoPhase.PROCESSING,
-                        AppNoteSaveCoordinator.PhotoPhase.ATTACHMENTS_WRITING
-                    )) {
-                    if (!bitmap.isRecycled) bitmap.recycle()
-                    return@execute
-                }
-                val attachments = try {
-                    FileInputStream(capture).use { repository.savePhotoPair(note, it, corrected) }
+                try {
+                    if (!AppNoteSaveCoordinator.transitionPhotoSession(
+                            operation,
+                            AppNoteSaveCoordinator.PhotoPhase.PROCESSING,
+                            AppNoteSaveCoordinator.PhotoPhase.ATTACHMENTS_WRITING
+                        )) {
+                        if (!workerBitmap.isRecycled) workerBitmap.recycle()
+                        return@execute
+                    }
+                    val attachments = try {
+                        FileInputStream(capture).use { repository.savePhotoPair(note, it, corrected) }
                 } catch (_: Exception) {
                     null
                 }
                 if (attachments == null) {
-                    AppNoteSaveCoordinator.completePhotoSession(
-                        capture.absolutePath,
-                        false,
-                        null,
-                        null,
-                        "照片尚未插入，请检查 Vault 权限或存储空间后重试"
-                    )
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
-                        showPhotoSaveFailure("照片尚未插入，请检查 Vault 权限或存储空间后重试")
-                    }
+                    // Pair creation may have written partial outputs; nullable Provider results prove no cleanup.
+                    AppNoteSaveCoordinator.requirePhotoRecovery(operation, getString(R.string.photo_unknown_outcome))
                     return@execute
                 }
                 if (!AppNoteSaveCoordinator.transitionPhotoSession(
-                        capture.absolutePath,
+                        operation,
                         AppNoteSaveCoordinator.PhotoPhase.ATTACHMENTS_WRITING,
                         AppNoteSaveCoordinator.PhotoPhase.READY_TO_COMMIT
                     )) {
-                    repository.rollbackPhotoPair(attachments)
-                    if (!bitmap.isRecycled) bitmap.recycle()
+                    if (!rollbackPhotoPairForOperation(attachments, operation)) return@execute
+                    if (!workerBitmap.isRecycled) workerBitmap.recycle()
                     return@execute
                 }
                 val relativePath = repository.relativeAttachmentPath(note, attachments)
                 val imageLink = "![${attachments.corrected}]($relativePath)"
                 val savedBody = repository.readText(note)
                 if (savedBody == null) {
-                    repository.rollbackPhotoPair(attachments)
+                    if (!rollbackPhotoPairForOperation(attachments, operation)) return@execute
                     val readErrorMsg = "无法读取笔记内容，照片未插入；请检查权限或存储后重试"
                     AppNoteSaveCoordinator.completePhotoSession(
-                        capture.absolutePath, false, null, null,
+                        operation, false, null, null,
                         readErrorMsg
                     )
-                    runOnUiThread {
-                        if (!isFinishing && !isDestroyed) showPhotoSaveFailure(readErrorMsg)
-                    }
                     return@execute
                 }
                 if (!PhotoCommitPolicy.canBeginCommit(expectedSavedBodyHash, savedBody)) {
-                    repository.rollbackPhotoPair(attachments)
+                    if (!rollbackPhotoPairForOperation(attachments, operation)) return@execute
                     val changeMsg = "笔记已在外部更改，照片未插入；请返回笔记确认最新内容"
                     AppNoteSaveCoordinator.completePhotoSession(
-                        capture.absolutePath, false, null, null,
+                        operation, false, null, null,
                         changeMsg
                     )
-                    runOnUiThread {
-                        if (!isFinishing && !isDestroyed) showPhotoSaveFailure(changeMsg)
-                    }
                     return@execute
                 }
                 val caret = PhotoCommitPolicy.adjustToSafeTokenBoundary(
                     savedBody,
-                    photoContextCaretOffset.coerceIn(0, savedBody.length)
+                    operation.caretOffset.coerceIn(0, savedBody.length)
                 )
                 val originalContent = savedBody.substring(0, caret) +
                     MarkdownCodec.CARET_MARKER +
                     savedBody.substring(caret)
                 val content = insertPhotoAtCapturePoint(originalContent, imageLink)
                 if (!AppNoteSaveCoordinator.transitionPhotoSession(
-                        capture.absolutePath,
+                        operation,
                         AppNoteSaveCoordinator.PhotoPhase.READY_TO_COMMIT,
                         AppNoteSaveCoordinator.PhotoPhase.COMMITTING
                     )) {
-                    repository.rollbackPhotoPair(attachments)
-                    if (!bitmap.isRecycled) bitmap.recycle()
+                    if (!rollbackPhotoPairForOperation(attachments, operation)) return@execute
+                    if (!workerBitmap.isRecycled) workerBitmap.recycle()
                     return@execute
                 }
                 repository.saveText(note, content)
@@ -3700,61 +3762,35 @@ class MainActivity : Activity() {
                     val refreshed = checkNotNull(committedNote)
                     repository.confirmPhotoPair(attachments)
                     AppNoteSaveCoordinator.completePhotoSession(
-                        capture.absolutePath,
+                        operation,
                         true,
                         refreshed,
                         relativePath
                     )
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed || AppNoteSaveCoordinator.isPhotoSessionCancelled(capture.absolutePath)) {
-                            if (!bitmap.isRecycled) bitmap.recycle()
-                            return@runOnUiThread
-                        }
-                        currentNote = refreshed
-                        pendingEditorScrollY = photoContextScrollY
-                        pendingCaretImagePath = relativePath
-                        photoContextContent = null
-                        photoSavedBodyHash = null
-                        photoContextCaretOffset = 0
-                        if (!bitmap.isRecycled) bitmap.recycle()
-                        discardCaptureFile()
-                        editorView = null
-                        photoStatusView = null
-                        photoInsertAction = null
-                        photoModeActions = emptyList()
-                        photoSavePending = false
-                        showEditor(refreshed, content)
-                        showEditorStatus("照片已插入并保存")
-                    }
                 }
                 PhotoPostSaveAction.ROLLBACK -> {
-                    repository.rollbackPhotoPair(attachments)
+                    if (!rollbackPhotoPairForOperation(attachments, operation)) return@execute
                     AppNoteSaveCoordinator.completePhotoSession(
-                        capture.absolutePath,
+                        operation,
                         false,
                         null,
                         null,
                         "无法更新笔记，照片尚未插入；可重试或返回笔记"
                     )
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed) {
-                            if (!bitmap.isRecycled) bitmap.recycle()
-                            return@runOnUiThread
-                        }
-                        showPhotoSaveFailure("无法更新笔记，照片尚未插入；可重试或返回笔记")
-                    }
                 }
                 PhotoPostSaveAction.RETAIN_FOR_RECOVERY -> {
                     AppNoteSaveCoordinator.requirePhotoRecovery(
-                        capture.absolutePath,
-                        "无法确认笔记写入结果；已保留照片事务，请重新打开 Vault 后检查"
+                        operation,
+                        getString(R.string.photo_unknown_outcome)
                     )
-                    runOnUiThread {
-                        if (!isFinishing && !isDestroyed) showPhotoSaveFailure(
-                            "无法确认笔记写入结果；已保留照片事务，请重新打开 Vault 后检查"
-                        )
-                    }
                 }
+                }
+                } catch (_: Exception) {
+                    AppNoteSaveCoordinator.requirePhotoRecovery(operation,
+                        getString(R.string.photo_unknown_outcome))
+                } finally {
+                    if (!workerBitmap.isRecycled) workerBitmap.recycle()
+                    AppNoteSaveCoordinator.finishPhotoWorker(operation)
                 }
             }
         }
@@ -3771,7 +3807,8 @@ class MainActivity : Activity() {
                 }
                 return
             }
-            photoSavePending = false
+            photoStatusView?.text = getString(R.string.photo_cancelling_cleanup)
+            return
         }
         discardCaptureFile()
         editorView = null
@@ -4738,8 +4775,7 @@ class MainActivity : Activity() {
 
     private fun discardCaptureFile() {
         captureFile?.let { file ->
-            AppNoteSaveCoordinator.clearPhotoSession(file.absolutePath)
-            file.delete()
+            if (!AppNoteSaveCoordinator.hasPhotoSession(file.absolutePath)) file.delete()
         }
         captureFile = null
         captureUri = null

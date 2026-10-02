@@ -170,3 +170,27 @@ cd android
   手机边缘；四角拖至原图边界与向内裁剪、切换模式、旋转后仍可准确操作。检查
   深浅色与最大字体。插入后重启并确认图片与相对 Markdown 链接有效；HAP 同样
   单独执行拍照/重启/链接检查，不将 Android 证据当作 HAP 验收。
+
+
+## 2026-10-02 · 生命周期开发修订
+
+最终修订自动化通过，设备证据待执行。初次 369 项及中间 APK 已被下述修复后结果替代。
+
+- 独立 tester 在 `android/` 使用已有 JDK 17（DevEco JBR 不可用）和 Android SDK 执行：
+  `./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon --rerun-tasks`。
+  Gradle 缓存锁在沙箱内不可写，授权缓存写入后 22s 构建成功，36 tasks 全部执行。
+- 最终 XML：48 suites / 374 tests，0 failures/errors/skips。包含生命周期 3 项、回滚策略 4 项、
+  保存协调时序 23 项、修订协调器 9 项；覆盖旧监听交接/显式消费、重复和过期操作、缺缓存终态、
+  取消后清理门禁、Provider false/异常/读取失败/替换/marker 残留、旧失败快照及跨笔记真实重试、
+  阻塞写入期间的原子修订推进。模拟端口不是实际 SAF。
+- `./scripts/verify-vault-contract.sh`、中英文新消息检查和 `git diff --check` 通过。
+  原 reviewer 修复后最终只读复查通过，无本轮范围内待修复发现；主协调者另汇总 XML 并核对包/哈希。
+- APK：`android/app/build/outputs/apk/debug/app-debug.apk`，`com.jambus.heji`，0.6.6（18），
+  7,206,512 bytes；生成时间 2026-10-02 19:53:27 +0800。
+  SHA-256：`ced4af141980f561279a2e9526538418474acd9f08998a450d29aa87c259c06e`。
+  `apksigner verify --print-certs` 通过，公共证书 SHA-256 与原版本一致：
+  `b3be289894592585b98c0ed9076f98612e7cddb7c7574c6343ce0b400d018e20`。
+- 本轮没有安装、操作个人 Vault/云盘或运行设备验收。Activity 旋转/重建、真正缺缓存 UI、
+  位图资源、实际 SAF 回滚、Mate APK 与 HAP 拍照→重启→图片/相对链接检查仍待执行。
+- 安全限制：不能确认写入或清理时禁止普通重试，提示重启应用后重新打开 Vault 核查。
+  `recoverVault()` 返回成功不被当作所有照片 marker 均已解决的证明；持久化 marker 格式未变化。

@@ -89,4 +89,10 @@
     <string name="sync_error_item">无法同步 %1$s</string>
     <string name="sync_error_interrupted">应用或系统中断了同步；本地文件保持不变。</string>
     <string name="about_build">v%1$s · 构建 %2$d</string>
+    <string name="photo_restoring_result">正在恢复照片处理结果…</string>
+    <string name="photo_cancelling_cleanup">正在取消照片处理并清理…</string>
+    <string name="photo_unknown_outcome">无法确认照片写入或清理结果；为避免重复插入，请重启应用后重新打开 Vault 检查已保存笔记。</string>
+    <string name="photo_decode_failed">无法处理照片，请重新拍摄</string>
+    <string name="photo_interrupted">照片处理已中断，之前的写入可能已完成。请先检查 Vault 已保存笔记再重新拍摄；应用不会重放之前的插入。</string>
+    <string name="photo_check_saved_note">检查 Vault 已保存笔记</string>
 </resources>

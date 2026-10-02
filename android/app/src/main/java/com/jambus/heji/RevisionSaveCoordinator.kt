@@ -87,6 +87,14 @@ class RevisionSaveCoordinator {
 }
 
 object EditorRecoveryPolicy {
+    fun failedSnapshotPersistedRevision(
+        restoredNoteMatches: Boolean, bundledPersistedRevision: Long, processPersistedRevision: Long
+    ): Long = if (restoredNoteMatches) maxOf(bundledPersistedRevision, processPersistedRevision)
+        else processPersistedRevision
+
+    fun canRestoreFailedSnapshot(restoredNoteMatches: Boolean, dirtyRevision: Long, snapshotRevision: Long): Boolean =
+        !restoredNoteMatches || dirtyRevision <= snapshotRevision
+
     fun requiresExplicitError(
         restoredNoteMatches: Boolean,
         dirtyRevision: Long,

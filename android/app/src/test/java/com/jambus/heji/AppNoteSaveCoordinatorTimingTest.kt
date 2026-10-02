@@ -14,6 +14,21 @@ import java.util.concurrent.atomic.AtomicReference
 
 class AppNoteSaveCoordinatorTimingTest {
 
+    private fun completePhoto(operation: AppNoteSaveCoordinator.PhotoOperation, success: Boolean,
+        note: VaultDocument?, attachment: String?, error: String? = null) {
+        AppNoteSaveCoordinator.completePhotoSession(operation, success, note, attachment, error)
+        AppNoteSaveCoordinator.finishPhotoWorker(operation)
+    }
+
+    private fun observePhoto(operation: AppNoteSaveCoordinator.PhotoOperation,
+        callback: (AppNoteSaveCoordinator.PhotoSessionResult) -> Unit) {
+        val owner = Any()
+        AppNoteSaveCoordinator.observePhotoSession(operation, owner) { result ->
+            callback(result)
+            AppNoteSaveCoordinator.acknowledgePhotoSession(operation, owner)
+        }
+    }
+
     private class InMemoryNoteStorage : NoteReadWriter {
         val storage = mutableMapOf<String, String>()
         val saveCalls = mutableListOf<Pair<String, String>>()
@@ -145,28 +160,28 @@ class AppNoteSaveCoordinatorTimingTest {
     }
 
     @Test
-    fun `photo session coordinates across rotation and auto-clears on observation`() {
+    fun `photo session coordinates across rotation and clears after explicit acknowledgement`() {
         val capturePath = "/data/user/0/cache/photo_capture_1.jpg"
         val noteUri = "content://heji/notes/photo_target.md"
         val targetDoc = VaultDocument(TestUri(noteUri), "photo_target.md", "text/markdown")
 
         // 1. Photo session begins
-        AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)
+        val operation = AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)!!
         assertTrue(AppNoteSaveCoordinator.hasActivePhotoSession(capturePath))
         assertTrue(AppNoteSaveCoordinator.hasPhotoSession(capturePath))
 
         // 2. Observer (e.g. new Activity after rotation) attaches while still InProgress
         val observedResult = AtomicReference<AppNoteSaveCoordinator.PhotoSessionResult>()
         val observerLatch = CountDownLatch(1)
-        AppNoteSaveCoordinator.observePhotoSession(capturePath) { result ->
+        observePhoto(operation) { result ->
             observedResult.set(result)
             observerLatch.countDown()
         }
 
         // 3. Background media & IO worker completes
         val refreshedDoc = targetDoc.copy(relativePath = "notes/photo_target.md")
-        AppNoteSaveCoordinator.completePhotoSession(
-            capturePath,
+        completePhoto(
+            operation,
             true,
             refreshedDoc,
             "assets/photo_target/123-photo.jpg"
@@ -179,21 +194,21 @@ class AppNoteSaveCoordinatorTimingTest {
         assertEquals(refreshedDoc, success.refreshedNote)
         assertEquals("assets/photo_target/123-photo.jpg", success.attachmentName)
 
-        // Session should be automatically cleared from active sessions
+        // Observer explicitly acknowledges the consumed terminal result
         assertFalse("Active session must be cleared after observation", AppNoteSaveCoordinator.hasPhotoSession(capturePath))
     }
 
     @Test
-    fun `photo session late observation receives completed result and auto-clears`() {
+    fun `photo session late observation receives completed result and explicitly acknowledges`() {
         val capturePath = "/data/user/0/cache/photo_capture_late.jpg"
         val noteUri = "content://heji/notes/late.md"
         val targetDoc = VaultDocument(TestUri(noteUri), "late.md", "text/markdown")
 
-        AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)
+        val operation = AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)!!
 
         // Background worker completes BEFORE the newly rotated Activity attaches observer
-        AppNoteSaveCoordinator.completePhotoSession(
-            capturePath,
+        completePhoto(
+            operation,
             true,
             targetDoc,
             "assets/late/pic.jpg"
@@ -205,7 +220,7 @@ class AppNoteSaveCoordinatorTimingTest {
 
         // New Activity arrives and attaches observer
         val observedResult = AtomicReference<AppNoteSaveCoordinator.PhotoSessionResult>()
-        AppNoteSaveCoordinator.observePhotoSession(capturePath) { result ->
+        observePhoto(operation) { result ->
             observedResult.set(result)
         }
 
@@ -219,11 +234,11 @@ class AppNoteSaveCoordinatorTimingTest {
         val capturePath = "/data/user/0/cache/photo_capture_fail.jpg"
         val noteUri = "content://heji/notes/fail.md"
 
-        AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)
-        AppNoteSaveCoordinator.completePhotoSession(capturePath, false, null, null, "Vault 写入空间不足")
+        val operation = AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)!!
+        completePhoto(operation, false, null, null, "Vault 写入空间不足")
 
         val observedResult = AtomicReference<AppNoteSaveCoordinator.PhotoSessionResult>()
-        AppNoteSaveCoordinator.observePhotoSession(capturePath) { result ->
+        observePhoto(operation) { result ->
             observedResult.set(result)
         }
 
@@ -294,19 +309,20 @@ class AppNoteSaveCoordinatorTimingTest {
         val capturePath = "/data/user/0/cache/photo_cancel.jpg"
         val noteUri = "content://heji/notes/cancel.md"
 
-        AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)
-        assertFalse(AppNoteSaveCoordinator.isPhotoSessionCancelled(capturePath))
+        val operation = AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)!!
+        assertFalse(AppNoteSaveCoordinator.isPhotoSessionCancelled(operation))
 
         val observedResult = AtomicReference<AppNoteSaveCoordinator.PhotoSessionResult>()
         val observerLatch = CountDownLatch(1)
-        AppNoteSaveCoordinator.observePhotoSession(capturePath) { result ->
+        observePhoto(operation) { result ->
             observedResult.set(result)
             observerLatch.countDown()
         }
 
         // User cancels while saving
-        AppNoteSaveCoordinator.cancelPhotoSession(capturePath)
-        assertTrue(AppNoteSaveCoordinator.isPhotoSessionCancelled(capturePath))
+        AppNoteSaveCoordinator.requestPhotoCancel(capturePath)
+        AppNoteSaveCoordinator.finishPhotoWorker(operation)
+        assertTrue(AppNoteSaveCoordinator.isPhotoSessionCancelled(operation))
 
         assertTrue("Observer should receive cancellation notice", observerLatch.await(2, TimeUnit.SECONDS))
         val res = observedResult.get()
@@ -321,15 +337,15 @@ class AppNoteSaveCoordinatorTimingTest {
             val noteUri = "content://heji/notes/race_$i.md"
             val doc = VaultDocument(TestUri(noteUri), "race.md", "text/markdown")
 
-            AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)
+            val operation = AppNoteSaveCoordinator.startPhotoSession(capturePath, noteUri)!!
             val resultReceived = AtomicReference<AppNoteSaveCoordinator.PhotoSessionResult>()
             val latch = CountDownLatch(1)
 
             val t1 = Thread {
-                AppNoteSaveCoordinator.completePhotoSession(capturePath, true, doc, "photo_$i.jpg")
+                completePhoto(operation, true, doc, "photo_$i.jpg")
             }
             val t2 = Thread {
-                AppNoteSaveCoordinator.observePhotoSession(capturePath) { res ->
+                observePhoto(operation) { res ->
                     resultReceived.set(res)
                     latch.countDown()
                 }
@@ -546,17 +562,17 @@ class AppNoteSaveCoordinatorTimingTest {
     fun `cancel and commit boundary is atomic`() {
         repeat(100) { index ->
             val path = "/tmp/photo-boundary-$index"
-            AppNoteSaveCoordinator.startPhotoSession(path, "content://heji/notes/photo.md")
-            assertTrue(AppNoteSaveCoordinator.transitionPhotoSession(path,
+            val operation = AppNoteSaveCoordinator.startPhotoSession(path, "content://heji/notes/photo.md")!!
+            assertTrue(AppNoteSaveCoordinator.transitionPhotoSession(operation,
                 AppNoteSaveCoordinator.PhotoPhase.PROCESSING,
                 AppNoteSaveCoordinator.PhotoPhase.ATTACHMENTS_WRITING))
-            assertTrue(AppNoteSaveCoordinator.transitionPhotoSession(path,
+            assertTrue(AppNoteSaveCoordinator.transitionPhotoSession(operation,
                 AppNoteSaveCoordinator.PhotoPhase.ATTACHMENTS_WRITING,
                 AppNoteSaveCoordinator.PhotoPhase.READY_TO_COMMIT))
             val cancelResult = AtomicReference<AppNoteSaveCoordinator.PhotoCancelResult>()
             val commitWon = AtomicBoolean(false)
             val cancelThread = Thread { cancelResult.set(AppNoteSaveCoordinator.requestPhotoCancel(path)) }
-            val commitThread = Thread { commitWon.set(AppNoteSaveCoordinator.transitionPhotoSession(path,
+            val commitThread = Thread { commitWon.set(AppNoteSaveCoordinator.transitionPhotoSession(operation,
                 AppNoteSaveCoordinator.PhotoPhase.READY_TO_COMMIT,
                 AppNoteSaveCoordinator.PhotoPhase.COMMITTING)) }
             cancelThread.start(); commitThread.start(); cancelThread.join(); commitThread.join()
@@ -567,7 +583,89 @@ class AppNoteSaveCoordinatorTimingTest {
                 assertEquals(AppNoteSaveCoordinator.PhotoCancelResult.ACCEPTED, cancelResult.get())
                 assertEquals(AppNoteSaveCoordinator.PhotoPhase.CANCELLED, AppNoteSaveCoordinator.photoPhase(path))
             }
-            AppNoteSaveCoordinator.clearPhotoSession(path)
+            AppNoteSaveCoordinator.resetForTests()
         }
+    }
+    @Test
+    fun `blocked successful write cannot clobber concurrent revision advance`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val done = CountDownLatch(1)
+        val doc = VaultDocument(TestUri("content://heji/concurrent.md"), "concurrent.md", "text/markdown")
+        val storage = object : NoteReadWriter {
+            override fun saveText(document: VaultDocument, content: String): Boolean {
+                entered.countDown()
+                assertTrue(release.await(2, TimeUnit.SECONDS))
+                return true
+            }
+            override fun refreshDocument(document: VaultDocument) = document
+            override fun readNote(document: VaultDocument) = NoteReadResult.Success("body")
+        }
+        AppNoteSaveCoordinator.submitSave(storage, doc, "rev1", 1L) { _, _ -> done.countDown() }
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        repeat(3) { AppNoteSaveCoordinator.advanceRevision(doc.uri.toString()) }
+        release.countDown()
+        assertTrue(done.await(2, TimeUnit.SECONDS))
+        assertEquals(3L, AppNoteSaveCoordinator.getRevision(doc.uri.toString()))
+    }
+    @Test
+    fun `late failed rev1 snapshot cannot masquerade as restored dirty rev2`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val done = CountDownLatch(1)
+        val doc = VaultDocument(TestUri("content://heji/failed-late.md"), "failed-late.md", "text/markdown")
+        val storage = object : NoteReadWriter {
+            override fun saveText(document: VaultDocument, content: String): Boolean {
+                entered.countDown()
+                assertTrue(release.await(2, TimeUnit.SECONDS))
+                return false
+            }
+            override fun refreshDocument(document: VaultDocument) = document
+            override fun readNote(document: VaultDocument) = NoteReadResult.Success("persisted")
+        }
+        AppNoteSaveCoordinator.beginSerialization(doc.uri.toString(), 1L)
+        AppNoteSaveCoordinator.submitSave(storage, doc, "failed rev1 body", 1L) { _, _ -> done.countDown() }
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        val restored = RevisionSaveCoordinator().apply { restore(2L, 0L) }
+        release.countDown()
+        assertTrue(done.await(2, TimeUnit.SECONDS))
+        val recovery = AppNoteSaveCoordinator.noteRecovery(doc.uri.toString()) as AppNoteSaveCoordinator.NoteRecovery.Failed
+        assertEquals("failed rev1 body", recovery.snapshot.content)
+        assertFalse(EditorRecoveryPolicy.canRestoreFailedSnapshot(true, restored.revision, recovery.snapshot.revision))
+        assertEquals(2L, restored.revision)
+    }
+    @Test
+    fun `high saved revision from another note cannot make failed low revision body clean`() {
+        val storage = InMemoryNoteStorage()
+        val a = VaultDocument(TestUri("content://heji/a.md"), "a.md", "text/markdown")
+        val b = VaultDocument(TestUri("content://heji/b.md"), "b.md", "text/markdown")
+        val savedA = CountDownLatch(1)
+        AppNoteSaveCoordinator.submitSave(storage, a, "A saved", 10L) { _, _ -> savedA.countDown() }
+        assertTrue(savedA.await(2, TimeUnit.SECONDS))
+        val failed = object : NoteReadWriter {
+            override fun saveText(document: VaultDocument, content: String) = false
+            override fun refreshDocument(document: VaultDocument) = document
+            override fun readNote(document: VaultDocument) = NoteReadResult.Success("B disk")
+        }
+        val failedB = CountDownLatch(1)
+        AppNoteSaveCoordinator.beginSerialization(b.uri.toString(), 1L)
+        AppNoteSaveCoordinator.submitSave(failed, b, "B unsaved", 1L) { _, _ -> failedB.countDown() }
+        assertTrue(failedB.await(2, TimeUnit.SECONDS))
+        val recovery = AppNoteSaveCoordinator.noteRecovery(b.uri.toString()) as AppNoteSaveCoordinator.NoteRecovery.Failed
+        val editor = RevisionSaveCoordinator().apply { reset(10L) }
+        editor.restore(recovery.snapshot.revision, EditorRecoveryPolicy.failedSnapshotPersistedRevision(
+            false, editor.persistedRevision, AppNoteSaveCoordinator.getRevision(b.uri.toString())), true)
+        assertTrue(editor.hasUnsavedChanges)
+        assertEquals(RevisionSaveCoordinator.State.FAILED, editor.state)
+        val request = editor.beginSave()!!
+        val written = CountDownLatch(1)
+        AppNoteSaveCoordinator.beginSerialization(b.uri.toString(), request.revision)
+        AppNoteSaveCoordinator.submitSave(storage, b, recovery.snapshot.content, request.revision) { success, _ ->
+            editor.complete(request, success)
+            written.countDown()
+        }
+        assertTrue(written.await(2, TimeUnit.SECONDS))
+        assertEquals("B unsaved", storage.storage[b.uri.toString()])
+        assertEquals(RevisionSaveCoordinator.State.SAVED, editor.state)
     }
 }

@@ -6,7 +6,7 @@
   服务状态为真实运行结果的唯一来源。不修改同步引擎、Vault 契约或持久任务格式。
 
 - Kotlin Android 工程位于 `android/`，使用项目内 Gradle Wrapper。
-- 当前开发版本为 `versionName 0.6.5`、`versionCode 17`；纳入 `008` D16–D24、FR-838/839，保留原调试签名，
+- 当前开发版本为 `versionName 0.6.6`、`versionCode 18`；纳入 `008` D16–D24、FR-838/839，保留原调试签名，
   各次构建/升级证据归入 `008` 验收记录；0.6.5 尚无安装验收，仍为未发布开发基线，后续候选版本按
   [`docs/RELEASE_NOTES.md`](../../RELEASE_NOTES.md) 的规则提升并记录。
 - 通过 Storage Access Framework 选择 Vault 并持久化目录 URI 权限。
@@ -90,3 +90,8 @@ T509 的标签/双向链接范围及 T556 的兼容迁移仍开放，不在文�
 
 HarmonyOS 4 Android 兼容层可能对持久 URI 权限、系统相机返回、WebView 编辑器和
 前台后台任务/通知存在差异。所有关键平台选型先以小型真机原型验证，失败时再替换组件。
+
+
+## 2026-10-02 · 生命周期开发修订
+
+0.6.6（18）更新进程内照片任务所有权和保存恢复。Vault 持久化契约和 HAP 行为不变；独立 fresh Android 374 项全套测试/APK 和原 reviewer 修复后复查通过，证据见 `008/quickstart.md`；真机覆盖仍待完成。

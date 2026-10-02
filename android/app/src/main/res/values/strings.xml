@@ -89,4 +89,10 @@
     <string name="sync_error_item">Could not sync %1$s</string>
     <string name="sync_error_interrupted">The app or system interrupted sync; local files are unchanged.</string>
     <string name="about_build">v%1$s · Build %2$d</string>
+    <string name="photo_restoring_result">Restoring photo processing result…</string>
+    <string name="photo_cancelling_cleanup">Cancelling photo processing and cleaning up…</string>
+    <string name="photo_unknown_outcome">Could not confirm the photo write or cleanup. To avoid repeating an insertion, restart the app, then reopen the Vault and check the saved note.</string>
+    <string name="photo_decode_failed">Could not process this photo. Take it again.</string>
+    <string name="photo_interrupted">Photo processing was interrupted. The earlier write may have completed. Check the saved Vault note before taking another photo; the previous insertion will not be replayed.</string>
+    <string name="photo_check_saved_note">Check saved Vault note</string>
 </resources>

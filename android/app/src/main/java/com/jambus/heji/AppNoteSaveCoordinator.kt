@@ -97,13 +97,22 @@ object AppNoteSaveCoordinator : Executor {
         data class Failure(val message: String) : PhotoSessionResult()
     }
 
-    private class PhotoSession(
+    data class PhotoOperation(
         val captureFilePath: String,
         val noteUri: String,
-        @Volatile var result: PhotoSessionResult = PhotoSessionResult.InProgress,
-        @Volatile var listener: ((PhotoSessionResult) -> Unit)? = null,
-        @Volatile var phase: PhotoPhase = PhotoPhase.PROCESSING
+        val caretOffset: Int = 0,
+        val scrollY: Int = 0,
+        val savedBodyHash: String? = null,
+        val id: String = java.util.UUID.randomUUID().toString()
     )
+
+    private class PhotoSession(val operation: PhotoOperation) {
+        var result: PhotoSessionResult = PhotoSessionResult.InProgress
+        var listener: ((PhotoSessionResult) -> Unit)? = null
+        var owner: Any? = null
+        var phase = PhotoPhase.PROCESSING
+        var workerDone = false
+    }
 
     enum class PhotoPhase {
         PROCESSING, ATTACHMENTS_WRITING, READY_TO_COMMIT, COMMITTING,
@@ -341,7 +350,7 @@ object AppNoteSaveCoordinator : Executor {
                     }
                 }
                 if (success) {
-                    noteRevisions[noteKey] = maxOf(currentMax, revision)
+                    noteRevisions.compute(noteKey) { _, current -> maxOf(current ?: -1L, revision) }
                 }
                 val refreshed = if (success) repository.refreshDocument(note) else null
                 if (pending != null) synchronized(pending) {
@@ -412,135 +421,121 @@ object AppNoteSaveCoordinator : Executor {
         }
     }
 
-    fun startPhotoSession(captureFilePath: String, noteUri: String) {
-        activePhotoSessions[captureFilePath] = PhotoSession(captureFilePath, noteUri)
+    fun startPhotoSession(
+        captureFilePath: String, noteUri: String, caretOffset: Int = 0,
+        scrollY: Int = 0, savedBodyHash: String? = null
+    ): PhotoOperation? {
+        val operation = PhotoOperation(captureFilePath, noteUri, caretOffset, scrollY, savedBodyHash)
+        return if (activePhotoSessions.putIfAbsent(captureFilePath, PhotoSession(operation)) == null) operation else null
     }
 
-    fun transitionPhotoSession(captureFilePath: String, expected: PhotoPhase, next: PhotoPhase): Boolean {
-        val session = activePhotoSessions[captureFilePath] ?: return false
+    fun photoOperation(path: String): PhotoOperation? = activePhotoSessions[path]?.operation
+
+    private fun session(operation: PhotoOperation): PhotoSession? =
+        activePhotoSessions[operation.captureFilePath]?.takeIf { it.operation == operation }
+
+    fun transitionPhotoSession(operation: PhotoOperation, expected: PhotoPhase, next: PhotoPhase): Boolean {
+        val session = session(operation) ?: return false
         synchronized(session) {
-            if (session.phase != expected) return false
+            if (session(operation) !== session || session.phase != expected) return false
             session.phase = next
             return true
         }
     }
 
-    fun photoPhase(captureFilePath: String): PhotoPhase? = activePhotoSessions[captureFilePath]?.let { session ->
-        synchronized(session) { session.phase }
+    fun photoPhase(path: String): PhotoPhase? = activePhotoSessions[path]?.let { synchronized(it) { it.phase } }
+
+    private fun deliver(session: PhotoSession) {
+        val owner = synchronized(session) { session.owner } ?: return
+        dispatchToMain {
+            synchronized(session) {
+                if (session(session.operation) !== session || session.owner !== owner) return@dispatchToMain
+                val callback = session.listener ?: return@dispatchToMain
+                if (session.result !is PhotoSessionResult.InProgress) callback(session.result)
+            }
+        }
     }
 
     fun completePhotoSession(
-        captureFilePath: String,
-        success: Boolean,
-        refreshedNote: VaultDocument?,
-        attachmentName: String?,
-        errorMessage: String? = null
+        operation: PhotoOperation, success: Boolean, refreshedNote: VaultDocument?,
+        attachmentName: String?, errorMessage: String? = null
     ) {
-        val session = activePhotoSessions[captureFilePath] ?: return
-        val res = if (success && refreshedNote != null && attachmentName != null) {
-            PhotoSessionResult.Success(refreshedNote, attachmentName)
-        } else {
-            PhotoSessionResult.Failure(errorMessage ?: "照片尚未插入，请重试")
-        }
-        var targetListener: ((PhotoSessionResult) -> Unit)? = null
+        val session = session(operation) ?: return
         synchronized(session) {
-            if (session.phase == PhotoPhase.CANCELLED) return
-            session.phase = if (res is PhotoSessionResult.Success) PhotoPhase.COMMITTED else PhotoPhase.FAILED
-            session.result = res
-            targetListener = session.listener
-            session.listener = null
+            if (session.phase == PhotoPhase.CANCELLED || session.phase == PhotoPhase.RECOVERY_REQUIRED) return
+            session.result = if (success && refreshedNote != null && attachmentName != null)
+                PhotoSessionResult.Success(refreshedNote, attachmentName)
+            else PhotoSessionResult.Failure(errorMessage ?: "照片尚未插入，请重试")
+            session.phase = if (success) PhotoPhase.COMMITTED else PhotoPhase.FAILED
         }
-        targetListener?.let { l ->
-            dispatchToMain { l(res) }
-        }
+        // Terminal results are delivered only after worker resources/rollback have been released.
     }
 
-    fun requirePhotoRecovery(captureFilePath: String, message: String) {
-        val session = activePhotoSessions[captureFilePath] ?: return
-        val result = PhotoSessionResult.Failure(message)
-        var targetListener: ((PhotoSessionResult) -> Unit)? = null
+    fun requirePhotoRecovery(operation: PhotoOperation, message: String) {
+        val session = session(operation) ?: return
         synchronized(session) {
-            if (session.phase != PhotoPhase.COMMITTING) return
             session.phase = PhotoPhase.RECOVERY_REQUIRED
-            session.result = result
-            targetListener = session.listener
-            session.listener = null
+            session.result = PhotoSessionResult.Failure(message)
         }
-        targetListener?.let { listener -> dispatchToMain { listener(result) } }
     }
 
-    fun observePhotoSession(captureFilePath: String, callback: (PhotoSessionResult) -> Unit) {
-        val session = activePhotoSessions[captureFilePath]
-        if (session == null) {
-            callback(PhotoSessionResult.Failure("照片任务已失效"))
-            return
-        }
-        var immediateResult: PhotoSessionResult? = null
+    fun finishPhotoWorker(operation: PhotoOperation) {
+        val session = session(operation) ?: return
         synchronized(session) {
-            if (session.phase == PhotoPhase.CANCELLED) {
-                immediateResult = PhotoSessionResult.Failure("照片处理已取消")
-            } else if (session.result !is PhotoSessionResult.InProgress) {
-                immediateResult = session.result
-            } else {
-                session.listener = { res ->
-                    callback(res)
-                    if (res !is PhotoSessionResult.InProgress) {
-                        clearPhotoSession(captureFilePath)
-                    }
-                }
-            }
+            session.workerDone = true
+            if (session.phase == PhotoPhase.CANCELLED) session.result = PhotoSessionResult.Failure("照片处理已取消")
         }
-        val resultToDeliver = immediateResult
-        if (resultToDeliver != null) {
-            callback(resultToDeliver)
-            clearPhotoSession(captureFilePath)
+        deliver(session)
+    }
+
+    fun observePhotoSession(operation: PhotoOperation, owner: Any, callback: (PhotoSessionResult) -> Unit) {
+        val session = session(operation) ?: return
+        synchronized(session) { session.owner = owner; session.listener = callback }
+        if (synchronized(session) { session.workerDone }) deliver(session)
+    }
+
+    fun detachPhotoObserver(owner: Any) {
+        activePhotoSessions.values.forEach { session -> synchronized(session) {
+            if (session.owner === owner) { session.owner = null; session.listener = null }
+        } }
+    }
+
+    fun acknowledgePhotoSession(operation: PhotoOperation, owner: Any): Boolean {
+        val session = session(operation) ?: return false
+        synchronized(session) {
+            if (session.owner !== owner || !session.workerDone || session.phase == PhotoPhase.RECOVERY_REQUIRED ||
+                session.result is PhotoSessionResult.InProgress) return false
+            return activePhotoSessions.remove(operation.captureFilePath, session)
         }
     }
 
-    fun requestPhotoCancel(captureFilePath: String): PhotoCancelResult {
-        val session = activePhotoSessions[captureFilePath] ?: return PhotoCancelResult.FINISHED
-        var targetListener: ((PhotoSessionResult) -> Unit)? = null
+    fun requestPhotoCancel(path: String): PhotoCancelResult {
+        val session = activePhotoSessions[path] ?: return PhotoCancelResult.FINISHED
         synchronized(session) {
             when (session.phase) {
                 PhotoPhase.PROCESSING, PhotoPhase.ATTACHMENTS_WRITING, PhotoPhase.READY_TO_COMMIT -> session.phase = PhotoPhase.CANCELLED
-                PhotoPhase.COMMITTING -> return PhotoCancelResult.TOO_LATE
+                PhotoPhase.COMMITTING, PhotoPhase.RECOVERY_REQUIRED -> return PhotoCancelResult.TOO_LATE
                 else -> return PhotoCancelResult.FINISHED
             }
-            targetListener = session.listener
-            session.listener = null
-        }
-        targetListener?.let { l ->
-            dispatchToMain { l(PhotoSessionResult.Failure("照片处理已取消")) }
         }
         return PhotoCancelResult.ACCEPTED
     }
 
-    fun cancelPhotoSession(captureFilePath: String) { requestPhotoCancel(captureFilePath) }
-
-    fun isPhotoSessionCancelled(captureFilePath: String): Boolean {
-        val session = activePhotoSessions[captureFilePath] ?: return true
+    fun isPhotoSessionCancelled(operation: PhotoOperation): Boolean {
+        val session = session(operation) ?: return true
         return synchronized(session) { session.phase == PhotoPhase.CANCELLED }
     }
 
-    fun clearPhotoSession(captureFilePath: String) {
-        activePhotoSessions.remove(captureFilePath)
-    }
+    fun hasActivePhotoSession(path: String): Boolean = activePhotoSessions[path]?.let {
+        synchronized(it) { !it.workerDone }
+    } ?: false
 
-    fun hasActivePhotoSession(captureFilePath: String): Boolean {
-        val session = activePhotoSessions[captureFilePath] ?: return false
-        synchronized(session) {
-            return session.phase !in setOf(PhotoPhase.CANCELLED, PhotoPhase.COMMITTED, PhotoPhase.FAILED, PhotoPhase.RECOVERY_REQUIRED) && session.result is PhotoSessionResult.InProgress
-        }
-    }
+    fun hasPhotoSession(path: String): Boolean = activePhotoSessions.containsKey(path)
 
-    fun hasPhotoSession(captureFilePath: String): Boolean {
-        return activePhotoSessions.containsKey(captureFilePath)
-    }
-
-    /** Destructive folder snapshots fail closed while any save/recovery or media write is live. */
+    /** Cancellation remains a barrier until the worker and rollback have actually finished. */
     fun isVaultMutationBarrierClear(): Boolean = pendingSavesById.isEmpty() && failedSnapshots.isEmpty() &&
         activePhotoSessions.values.none { session -> synchronized(session) {
-            session.phase !in setOf(PhotoPhase.CANCELLED, PhotoPhase.COMMITTED, PhotoPhase.FAILED)
+            !session.workerDone || session.phase == PhotoPhase.RECOVERY_REQUIRED
         } }
 
     fun resetForTests() {

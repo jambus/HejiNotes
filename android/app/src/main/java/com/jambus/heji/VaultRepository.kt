@@ -33,7 +33,8 @@ data class PhotoAttachments(
     val original: String,
     val corrected: String,
     val relativeDirectory: String,
-    val transactionUri: Uri
+    val transactionUri: Uri,
+    val rollbackIdentity: PhotoRollbackIdentity? = null
 )
 
 enum class PhotoPostSaveAction { CONFIRM, ROLLBACK, RETAIN_FOR_RECOVERY }
@@ -1330,15 +1331,23 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
             resolver.openOutputStream(marker, "wt")?.use { output ->
                 output.write("$originalName\n$correctedName".toByteArray(StandardCharsets.UTF_8))
             } ?: throw IllegalStateException("Unable to write photo transaction")
-            resolver.openOutputStream(originalTemp, "wt")?.use { output -> original.copyTo(output) }
-                ?: throw IllegalStateException("Unable to write original")
+            val originalDigest = MessageDigest.getInstance("SHA-256")
+            resolver.openOutputStream(originalTemp, "wt")?.use { output ->
+                java.security.DigestInputStream(original, originalDigest).copyTo(output)
+            } ?: throw IllegalStateException("Unable to write original")
+            val originalHash = originalDigest.digest().joinToString("") { "%02x".format(it) }
             resolver.openOutputStream(correctedTemp, "wt")?.use { output -> output.write(corrected) }
                 ?: throw IllegalStateException("Unable to write corrected")
             committedOriginal = DocumentsContract.renameDocument(resolver, originalTemp, originalName)
                 ?: throw IllegalStateException("Unable to commit original")
             committedCorrected = DocumentsContract.renameDocument(resolver, correctedTemp, correctedName)
                 ?: throw IllegalStateException("Unable to commit corrected")
-            PhotoAttachments(originalName, correctedName, relativeDirectory, marker)
+            PhotoAttachments(originalName, correctedName, relativeDirectory, marker,
+                PhotoRollbackIdentity(tree.toString(), directory.toString(), listOf(
+                    PhotoRollbackFile(originalName, committedOriginal.toString(), originalHash),
+                    PhotoRollbackFile(correctedName, committedCorrected.toString(), sha256(corrected))
+                ), PhotoRollbackFile(".markbook-$id.txn", marker.toString(),
+                    sha256("$originalName\n$correctedName".toByteArray(StandardCharsets.UTF_8)))))
         } catch (_: Exception) {
             try { DocumentsContract.deleteDocument(resolver, marker) } catch (_: Exception) { }
             try { DocumentsContract.deleteDocument(resolver, originalTemp) } catch (_: Exception) { }
@@ -1353,16 +1362,43 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         try { DocumentsContract.deleteDocument(resolver, attachments.transactionUri) } catch (_: Exception) { }
     }
 
-    fun rollbackPhotoPair(attachments: PhotoAttachments) {
-        val tree = savedVaultUri() ?: return
-        val directory = findByRelativePath(tree, attachments.relativeDirectory)?.uri ?: return
-        var allDeleted = true
-        listOf(attachments.original, attachments.corrected).forEach { name ->
-            findChild(tree, directory, name)?.let {
-                try { if (!DocumentsContract.deleteDocument(resolver, it.uri)) allDeleted = false } catch (_: Exception) { allDeleted = false }
+    fun rollbackPhotoPair(attachments: PhotoAttachments): Boolean {
+        val identity = attachments.rollbackIdentity ?: return false
+        val tree = savedVaultUri()?.takeIf { it.toString() == identity.vault } ?: return false
+        return try {
+            // Resolve again for every read/delete: a vanished directory is not an empty listing.
+            fun verifiedDirectory(): Uri {
+                if (savedVaultUri()?.toString() != identity.vault || attachments.relativeDirectory.isBlank())
+                    throw IllegalStateException("Photo rollback Vault identity changed")
+                var directory = rootDocument(tree)
+                var prefix = ""
+                for (part in attachments.relativeDirectory.split('/').filter { it.isNotEmpty() }) {
+                    val matches = listChildrenStrict(tree, directory, prefix, true).filter { it.name == part }
+                    val next = matches.singleOrNull()?.takeIf {
+                        it.mimeType == DocumentsContract.Document.MIME_TYPE_DIR
+                    } ?: throw IllegalStateException("Photo rollback directory is unknown")
+                    directory = next.uri
+                    prefix = joinRelativePath(prefix, part)
+                }
+                if (directory.toString() != identity.directory)
+                    throw IllegalStateException("Photo rollback directory identity changed")
+                return directory
             }
-        }
-        if (allDeleted) try { DocumentsContract.deleteDocument(resolver, attachments.transactionUri) } catch (_: Exception) { }
+            PhotoRollbackPolicy.rollback(identity, object : PhotoRollbackPort {
+                override fun list(): List<PhotoRollbackPort.Entry> =
+                    listChildrenStrict(tree, verifiedDirectory(), attachments.relativeDirectory, true).map {
+                        PhotoRollbackPort.Entry(it.name, it.uri.toString())
+                    }
+                override fun sha256(entry: PhotoRollbackPort.Entry): String? {
+                    verifiedDirectory()
+                    return resolver.openInputStream(Uri.parse(entry.identity))?.use(::sha256)
+                }
+                override fun delete(entry: PhotoRollbackPort.Entry): Boolean {
+                    verifiedDirectory()
+                    return DocumentsContract.deleteDocument(resolver, Uri.parse(entry.identity))
+                }
+            })
+        } catch (_: Exception) { false }
     }
 
     /** Writes one original system-camera video under an attachment marker. Cache ownership remains with caller. */
@@ -2547,7 +2583,9 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
         emptyList()
     }
 
-    private fun listChildrenStrict(tree: Uri, parent: Uri, parentRelativePath: String = ""): List<VaultDocument> {
+    private fun listChildrenStrict(
+        tree: Uri, parent: Uri, parentRelativePath: String = "", requireIdentity: Boolean = false
+    ): List<VaultDocument> {
         val parentId = DocumentsContract.getDocumentId(parent)
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
         val projection = arrayOf(
@@ -2565,8 +2603,12 @@ class VaultRepository(private val context: Context, private val fixedVaultUri: U
             val sizeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
             buildList {
                 while (cursor.moveToNext()) {
-                    val name = cursor.getString(nameIndex) ?: continue
-                    val id = cursor.getString(idIndex) ?: continue
+                    val name = cursor.getString(nameIndex)
+                    val id = cursor.getString(idIndex)
+                    if (name == null || id == null) {
+                        if (requireIdentity) throw IllegalStateException("Missing document identity")
+                        continue
+                    }
                     val uri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
                     add(VaultDocument(
                         uri,

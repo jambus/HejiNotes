@@ -125,4 +125,9 @@ class RevisionSaveCoordinatorTest {
             operationExpired = true
         ))
     }
+    @Test
+    fun `older failed body cannot restore latest dirty revision`() {
+        assertFalse(EditorRecoveryPolicy.canRestoreFailedSnapshot(true, 2L, 1L))
+        assertTrue(EditorRecoveryPolicy.canRestoreFailedSnapshot(true, 2L, 2L))
+    }
 }
